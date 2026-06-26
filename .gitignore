@@ -1,0 +1,29 @@
+# ── Secrets — NEVER commit these ─────────────────────────────────────────
+bot_secrets.py
+
+# ── Runtime data — logs, state, generated each run ──────────────────────
+logs/
+*.log
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Backups created by self-tuning / auto-apply ──────────────────────────
+logs/strategy_updates/
+logs/pending_approvals.json
+logs/approval_history.json
+logs/liveness.json
+logs/watchdog_restart_count.json
+
+# ── OS / editor cruft ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# ── Python environment ────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+*.egg-info/

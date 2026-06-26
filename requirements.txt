@@ -1,0 +1,12 @@
+# Core — required for the bot and watchdog to run at all
+python-kucoin==2.1.3
+pandas
+requests
+beautifulsoup4
+
+# Optional — used by additional exchanges, dashboards, and backtesting.
+# Not required just to run bot.py + watchdog.py against KuCoin.
+ccxt
+matplotlib
+streamlit
+plotly
