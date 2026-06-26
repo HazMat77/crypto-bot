@@ -123,6 +123,47 @@ def discover_bybit(min_volume: float, exclude_keywords: list) -> list:
         return []
 
 
+# Kraken's legacy X/Z-prefixed asset codes. Only assets Kraken originally
+# listed under the old ISO-4217-style convention carry these — newer
+# listings (AVAX, MATIC, SOL, etc.) use their plain ticker with NO prefix
+# at all. A blind "strip the first X anywhere in the string" approach
+# breaks both cases: it fails to map XDG -> DOGE correctly, and it
+# corrupts modern tickers like AVAX by deleting the X from the middle of
+# the word (AVAX -> AVA). This table is built directly from Kraken's own
+# published asset code reference — see:
+# https://support.kraken.com/articles/360001206766-bitcoin-currency-code-xbt-vs-btc
+KRAKEN_LEGACY_ASSET_MAP = {
+    "XXBT": "BTC",   # Bitcoin (Kraken pair code form, double-X)
+    "XBT":  "BTC",   # Bitcoin (Kraken's plain code, single-X)
+    "XETC": "ETC",
+    "XETH": "ETH",
+    "XLTC": "LTC",
+    "XMLN": "MLN",
+    "XREP": "REP",
+    "XXDG": "DOGE",  # Dogecoin (Kraken pair code form, double-X)
+    "XDG":  "DOGE",  # Dogecoin (Kraken's plain code, single-X)
+    "XXLM": "XLM",
+    "XXMR": "XMR",
+    "XXRP": "XRP",
+    "XZEC": "ZEC",
+}
+
+
+def kraken_pair_to_coin(pair_code_without_quote: str) -> str:
+    """
+    Converts a Kraken base-asset code (already stripped of the USDT quote
+    suffix) to the coin's normal ticker. Checks the legacy X/Z-prefix
+    table FIRST and ONLY maps if there's an exact match — anything not in
+    the table (AVAX, MATIC, SOL, every newer listing) is returned
+    completely unmodified. This is the deliberate fix for a previous bug
+    that did `.replace("X", "", 1)`, which silently deleted the first "X"
+    anywhere in the string rather than only a genuine legacy prefix —
+    corrupting modern tickers like AVAX into "AVA" and mishandling DOGE's
+    XDG code into "DG" instead of "DOGE".
+    """
+    return KRAKEN_LEGACY_ASSET_MAP.get(pair_code_without_quote, pair_code_without_quote)
+
+
 def discover_kraken(min_volume: float, exclude_keywords: list) -> list:
     try:
         resp = requests.get("https://api.kraken.com/0/public/Ticker", timeout=15)
@@ -131,7 +172,8 @@ def discover_kraken(min_volume: float, exclude_keywords: list) -> list:
         for pair_code, t in data.items():
             if not pair_code.endswith("USDT"):
                 continue
-            coin = pair_code[:-4].replace("X", "", 1).replace("XBT", "BTC")
+            base = pair_code[:-4]   # strip the "USDT" quote suffix only
+            coin = kraken_pair_to_coin(base)
             sym  = f"{coin}-USDT"
             if should_exclude(sym, exclude_keywords):
                 continue

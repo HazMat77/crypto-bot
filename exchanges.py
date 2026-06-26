@@ -343,13 +343,51 @@ class BinanceExchange(BaseExchange):
 class KrakenExchange(BaseExchange):
     BASE = "https://api.kraken.com"
 
+    # Reverse of coin_discovery.py's KRAKEN_LEGACY_ASSET_MAP — converts a
+    # normal coin ticker INTO Kraken's pair-code form when placing orders
+    # or querying prices. Must stay the exact inverse of the discovery
+    # mapping, or a coin discovered correctly (e.g. DOGE-USDT) would fail
+    # to resolve back to a valid Kraken pair when the bot tries to
+    # actually trade it (DOGE has no direct Kraken pair — it must be
+    # converted back to XDGUSDT first).
+    #
+    # NOTE: deliberately does NOT use a blind substring .replace() the
+    # way the old buggy version did — that approach corrupted any ticker
+    # that happened to contain "BTC" as a substring anywhere, and only
+    # handled Bitcoin, leaving every other legacy-prefixed asset (DOGE,
+    # XMR, XRP, XLM, ETC, LTC, MLN, REP, ZEC) broken. This only rewrites
+    # an EXACT, whole-ticker match against the known legacy list; every
+    # other coin (AVAX, MATIC, SOL, etc.) passes through unmodified,
+    # exactly mirroring how Kraken's own newer listings carry no prefix.
+    LEGACY_COIN_TO_KRAKEN = {
+        "BTC":  "XBT",
+        "DOGE": "XDG",
+        "ETC":  "XETC",
+        "ETH":  "XETH",
+        "LTC":  "XLTC",
+        "MLN":  "XMLN",
+        "REP":  "XREP",
+        "XLM":  "XXLM",
+        "XMR":  "XXMR",
+        "XRP":  "XXRP",
+        "ZEC":  "XZEC",
+    }
+
     def __init__(self, credentials):
         super().__init__("kraken", credentials)
 
     def normalize_symbol(self, symbol):
-        # BTC-USDT → XBTUSDT (Kraken uses XBT for BTC)
-        sym = symbol.replace("-", "").replace("BTC", "XBT")
-        return sym
+        """
+        Converts a normal "COIN-USDT" symbol into the exact pair code
+        Kraken's API expects (e.g. "DOGE-USDT" -> "XDGUSDT",
+        "AVAX-USDT" -> "AVAXUSDT" unchanged since AVAX has no legacy
+        prefix). Only rewrites the coin if it's an EXACT match against
+        LEGACY_COIN_TO_KRAKEN — never a substring match — so a ticker
+        like AVAX is never mistaken for containing a legacy code.
+        """
+        coin, _, quote = symbol.partition("-")
+        coin = self.LEGACY_COIN_TO_KRAKEN.get(coin, coin)
+        return f"{coin}{quote}"
 
     def _sign(self, path, data):
         nonce    = str(int(time.time() * 1000))
@@ -418,7 +456,10 @@ class KrakenExchange(BaseExchange):
         resp = requests.post(f"{self.BASE}{path}", data={"nonce": nonce}, timeout=10,
                              headers={"API-Key": self.credentials["api_key"], "API-Sign": sig})
         bals = resp.json().get("result", {})
-        kraken_coin = coin.replace("BTC", "XBT")
+        # Exact-match lookup against the legacy table, same as normalize_symbol —
+        # NOT a substring .replace(), which previously mishandled every
+        # legacy-prefixed coin except Bitcoin and corrupted modern tickers.
+        kraken_coin = self.LEGACY_COIN_TO_KRAKEN.get(coin, coin)
         return float(bals.get(kraken_coin, bals.get(f"X{kraken_coin}", 0)))
 
 
