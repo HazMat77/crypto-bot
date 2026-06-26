@@ -437,28 +437,42 @@ WATCHDOG_MAX_RESTARTS_PER_DAY  = 3     # circuit breaker — stops auto-restart 
                                         # forever on a bot that's persistently broken
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  AUTO-UPDATE — pulls new code from your GitHub repo automatically
+#  AUTO-UPDATE — checks your GitHub repo for new commits
 #  Requires the bot to be running from a `git clone` (not a standalone
 #  .zip extract) so there's a remote to check against. See auto_updater.py
-#  for the full mechanism and README.txt for setup (git init, remote add,
-#  first push).
+#  for the full mechanism and README.md for setup.
 # ══════════════════════════════════════════════════════════════════════════════
 
-AUTO_UPDATE_ENABLED             = False   # OFF by default — turn on once you've
-                                           # pushed this repo to your own GitHub
+AUTO_UPDATE_ENABLED             = True    # ON by default — checking for updates
+                                           # is always safe; see AUTO_UPDATE_MODE
+                                           # below for what happens once one is found
 AUTO_UPDATE_CHECK_INTERVAL_SECS = 3600    # check once per hour
 AUTO_UPDATE_REMOTE              = "origin"
 AUTO_UPDATE_BRANCH              = "main"
 
-# False (your current setting): pulls immediately the moment an update is
-# found — in BOTH paper and live mode — sends you a Telegram notice after
-# the fact, then exits so the watchdog relaunches it on the new code.
-# There is no waiting period and no Y/N gate before this happens.
+# What happens when an update IS found. Three options:
 #
-# Set to True instead if you want a review window before updates take
-# effect — this routes through approval_gate.py and waits for your Y/N
-# reply, same as monthly strategy reviews and regime changes.
-AUTO_UPDATE_REQUIRE_APPROVAL    = False
+#   "notify_only" (DEFAULT — recommended for everyone, including multi-user
+#   distribution): never pulls automatically, in either paper or live mode.
+#   Sends a Telegram message saying an update is available, and that's it —
+#   nothing changes on disk and nothing restarts until the person running
+#   the bot deliberately sends /update via Telegram, or runs `git pull`
+#   themselves, whenever is convenient for them. This is the only mode where
+#   a push to your repo can NEVER silently take over someone else's running
+#   bot — every update requires a deliberate action by the person it affects.
+#
+#   "require_approval": sends a Y/N approval request through the same
+#   mechanism as monthly strategy reviews (approval_gate.py) and pulls only
+#   after an explicit Y reply. Functionally similar to notify_only but uses
+#   the formal approval-gate flow/audit log instead of the /update command.
+#
+#   "auto_apply": pulls immediately the moment an update is found, in BOTH
+#   paper and live mode, with no review window and no approval step —
+#   notifies only AFTER the pull, then restarts. This is the highest-risk
+#   option: a single push from you takes effect on every running bot with
+#   this mode set, including anyone trading real money, within
+#   AUTO_UPDATE_CHECK_INTERVAL_SECS. Only use this for a bot you alone run.
+AUTO_UPDATE_MODE = "notify_only"
 
 # ── Auto-apply for small, low-risk changes ─────────────────────────────────
 # OFF by default. When ON, a proposal auto-applies without waiting for your

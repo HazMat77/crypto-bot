@@ -9,16 +9,21 @@ Current version: see [`version.py`](version.py)
 > Paper trading is the default. Read the whole **Safety** section before
 > ever setting `PAPER_TRADING = False`.
 
+This repo is public so anyone can clone and run their own independent copy.
+**Each person's API keys and Telegram credentials stay entirely local to
+their own machine** — see **Secrets** below for why this is safe even
+with auto-update checking in the background.
+
 ---
 
-## Quick start
+## Setup (anyone cloning this)
 
 ```bash
-git clone <your-fork-or-repo-url>
-cd CryptoTradingBot
-pip install -r requirements.txt   # or see INSTALL_LINUX.sh / INSTALL.bat
+git clone https://github.com/HazMat77/crypto-bot.git
+cd crypto-bot
+pip install -r requirements.txt
 cp bot_secrets.example.py bot_secrets.py
-# edit bot_secrets.py with your real API keys (see "Secrets" below)
+# edit bot_secrets.py with YOUR OWN KuCoin/Telegram/AI keys — never anyone else's
 python bot.py --mode paper
 ```
 
@@ -28,8 +33,36 @@ In another terminal (or as a separate service — see **Watchdog**):
 python watchdog.py
 ```
 
-Platform-specific quick starts: `README_WINDOWS.txt`, `README_LINUX.txt`,
-`README_ANDROID.txt`. Telegram bot setup: `README_TELEGRAM.txt`.
+---
+
+## Quick start — platform-specific guides
+
+`README_WINDOWS.txt`, `README_LINUX.txt`, `README_ANDROID.txt` for
+install-script details on each OS. Telegram bot setup: `README_TELEGRAM.txt`.
+
+---
+
+## Running it (Windows, manual start)
+
+Every time you want to trade, open two Command Prompt / PowerShell windows
+in the bot's folder:
+
+```cmd
+python bot.py --mode paper
+```
+```cmd
+python watchdog.py
+```
+
+(or double-click `START_BOT.bat` and `WATCHDOG.bat` instead — same effect)
+
+Closing either window, or shutting down/restarting the PC, stops both.
+Nothing trades or auto-updates unless you've deliberately started `bot.py`
+yourself — this is intentional, by request, rather than an unattended
+always-on setup. Keep **both** windows open together if you want the
+watchdog's auto-restart-after-update behavior to actually apply; if only
+`bot.py` is running and it exits to apply an update, nothing will bring it
+back up until you relaunch it yourself.
 
 ---
 
@@ -58,6 +91,24 @@ rename it.
 key in it immediately — removing the file in a later commit does not
 remove it from git history.
 
+### Multiple people running their own clone of this same repo
+
+`bot_secrets.py` is gitignored on every clone independently — it's never
+part of any commit, push, or pull. This means:
+
+- Your `bot_secrets.py` and someone else's `bot_secrets.py` never interact,
+  collide, or overwrite each other, even though you're both tracking the
+  same `origin/main`.
+- An update — in any `AUTO_UPDATE_MODE` — only ever touches *tracked*
+  files (the actual `.py` code). It has no mechanism to read, modify, or
+  replace an untracked file. Your KuCoin keys, Telegram token, and AI key
+  stay exactly as you typed them, regardless of how many updates get
+  applied.
+- Each person decides for themselves when (or whether) to apply an
+  update — see **Auto-Update** below. The default mode (`notify_only`)
+  means a push from the repo owner never silently takes over anyone else's
+  running bot.
+
 ---
 
 ## Commands (via Telegram)
@@ -67,6 +118,7 @@ remove it from git history.
 | `/status` | Pool balance, tier, version, open positions |
 | `/heartbeat` | On-demand snapshot — pool, P&L, live unrealized P&L per position |
 | `/version` | Current bot version |
+| `/update` | Check for and apply an available update right now |
 | `/trades` | Today's completed trades |
 | `/daily` / `/monthly` | Full P&L reports |
 | `/coins` | Active trading coins |
@@ -135,55 +187,73 @@ flag meant for unplanned failures.
 
 ## Auto-Update
 
-The bot can pull updates from its own GitHub remote and restart itself on
-the new code, with the watchdog guaranteeing it comes back up.
+The bot can check its own GitHub remote for new commits. **By default it
+only ever notifies you — it never pulls or restarts on its own.** You (or
+anyone running their own clone) decide when to actually apply an update.
 
 ### Setup
 
+If you haven't already:
+
 ```bash
-git remote add origin <your-repo-url>
+git remote add origin https://github.com/HazMat77/crypto-bot.git
 git push -u origin main
 ```
 
-Then in `config.py`:
+Config (`config.py`) — these are the defaults, nothing extra to set up:
 
 ```python
-AUTO_UPDATE_ENABLED             = True
-AUTO_UPDATE_CHECK_INTERVAL_SECS = 3600     # check hourly
+AUTO_UPDATE_ENABLED             = True          # checking is always on by default
+AUTO_UPDATE_CHECK_INTERVAL_SECS = 3600          # check hourly
 AUTO_UPDATE_REMOTE              = "origin"
 AUTO_UPDATE_BRANCH              = "main"
-AUTO_UPDATE_REQUIRE_APPROVAL    = False    # see warning below
+AUTO_UPDATE_MODE                = "notify_only" # see the three modes below
 ```
 
-### How it behaves (current setting: `AUTO_UPDATE_REQUIRE_APPROVAL = False`)
+### The three modes (`AUTO_UPDATE_MODE`)
 
-When a new commit is found on `origin/main`, the bot:
+**`"notify_only"` — the default, recommended for everyone, especially if
+other people are running their own clone of this bot.** When a new commit
+is found:
 
-1. Pulls it immediately — **in both paper AND live mode** — with no
-   waiting period and no Y/N approval gate.
-2. Sends you a Telegram notice *after* the pull, not before.
-3. Exits cleanly. The watchdog detects this was a deliberate update (not a
-   crash) and relaunches `bot.py` on the new code automatically — this
-   restart happens even if `WATCHDOG_AUTO_RESTART` is off, and does not
-   count against `WATCHDOG_MAX_RESTARTS_PER_DAY`.
+1. You get exactly one Telegram message saying an update is available —
+   you won't be re-notified for the same commit on every later check.
+2. **Nothing else happens.** No file changes, no restart, no pull.
+3. Whenever it's convenient, send **`/update`** in Telegram, or run
+   `git pull` yourself on the machine. Either way, it's a deliberate action
+   you take, not something that happens to you.
 
-> **This means new code can take control of real trades with zero human
-> review window, in live mode, the moment you push to `main`.** That's the
-> behavior you asked for. If you'd rather review changes before they go
-> live — especially for a bot trading real money — set
-> `AUTO_UPDATE_REQUIRE_APPROVAL = True` instead, which routes the update
-> through the same Y/N Telegram approval gate used for monthly strategy
-> reviews, and only pulls after you reply `Y`.
+This is the only mode where a push to your repo can never silently take
+over someone else's running bot — including your own, in live mode.
 
-### Safety guard
+**`"require_approval"`** — sends a Y/N Telegram approval request (the same
+mechanism used for monthly strategy reviews) and only pulls after an
+explicit `Y` reply. Functionally similar to `notify_only`, but goes
+through the formal approval-gate flow and audit log instead of `/update`.
 
-If you've hand-edited a tracked file (e.g. `config.py`) on the deployed
-machine and haven't committed it, the auto-updater refuses to pull —
-`git pull` over uncommitted changes can silently overwrite or conflict.
-You'll get a Telegram notice explaining exactly that instead.
+**`"auto_apply"`** — pulls immediately the moment an update is found, in
+**both paper and live mode**, with no review window — notifies only
+*after* the pull, then restarts. The watchdog detects this was a
+deliberate update (not a crash) and relaunches `bot.py` automatically;
+this restart happens even if `WATCHDOG_AUTO_RESTART` is off, and doesn't
+count against `WATCHDOG_MAX_RESTARTS_PER_DAY`.
+
+> ⚠️ **`auto_apply` means a single push from you takes effect on every
+> running bot in that mode — including anyone else's live-money bot — within
+> `AUTO_UPDATE_CHECK_INTERVAL_SECS`, with no chance for them to review it
+> first.** Only use this for a bot you alone run, and even then, only once
+> you trust your own testing before every push.
+
+### Safety guard (applies to every mode)
+
+If a tracked file (e.g. `config.py`) has been hand-edited on the deployed
+machine and not committed, the auto-updater refuses to pull — `git pull`
+over uncommitted changes can silently overwrite or conflict. You'll get a
+Telegram notice explaining exactly that instead, in any mode.
 
 `bot_secrets.py` and everything under `logs/` are gitignored and untouched
-by any of this either way.
+by any of this, in every mode — an update can never read, change, or
+overwrite anyone's API keys or Telegram credentials.
 
 ---
 

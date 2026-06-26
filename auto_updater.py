@@ -17,16 +17,19 @@ HOW IT DECIDES THERE'S AN UPDATE:
   2. Compare the local HEAD commit hash against the remote's HEAD
   3. If they differ, there's an update available
 
-WHAT HAPPENS WHEN AN UPDATE IS FOUND (per your config — see
-AUTO_UPDATE_REQUIRE_APPROVAL in config.py):
-  - AUTO_UPDATE_REQUIRE_APPROVAL = False (your current setting): pulls
-    immediately in both paper AND live mode, sends a Telegram notice
-    after the fact, then exits so the watchdog relaunches it. There is
-    NO waiting period and NO Y/N gate before this happens — by design,
-    per your explicit choice. If you want a review window before updates
-    take effect (especially in live mode), set this to True instead.
-  - AUTO_UPDATE_REQUIRE_APPROVAL = True: sends a Y/N approval request
-    (same mechanism as approval_gate.py) and only pulls after you reply Y.
+WHAT HAPPENS WHEN AN UPDATE IS FOUND (per AUTO_UPDATE_MODE in config.py):
+  - "notify_only" (DEFAULT): never pulls on its own, in either paper or
+    live mode. Sends one Telegram notice per new commit and waits — the
+    person running the bot applies it themselves via /update whenever
+    it's convenient, or by running `git pull` by hand. Nothing changes
+    on disk and nothing restarts until they take that action.
+  - "require_approval": sends a Y/N approval request (same mechanism as
+    monthly strategy reviews) and pulls only after an explicit Y reply.
+  - "auto_apply": pulls immediately the moment an update is found, in
+    BOTH paper and live mode, with no review window — notifies only
+    after the pull, then restarts. Highest risk: a single push takes
+    effect on every running bot in this mode within
+    AUTO_UPDATE_CHECK_INTERVAL_SECS. Intended only for a bot you alone run.
 
 SAFETY NOTES:
   - Refuses to pull if there are uncommitted local changes to tracked
@@ -44,11 +47,11 @@ SAFETY NOTES:
     update check logs once and does nothing — it never errors the bot.
 
 CONFIG (see config.py):
-  AUTO_UPDATE_ENABLED            — master on/off switch
+  AUTO_UPDATE_ENABLED            — master on/off switch for CHECKING (default True)
   AUTO_UPDATE_CHECK_INTERVAL_SECS— how often to check (default 1 hour)
   AUTO_UPDATE_REMOTE             — git remote name (default "origin")
   AUTO_UPDATE_BRANCH             — branch to track (default "main")
-  AUTO_UPDATE_REQUIRE_APPROVAL   — wait for Y/N instead of pulling immediately
+  AUTO_UPDATE_MODE               — "notify_only" (default) | "require_approval" | "auto_apply"
 """
 
 import subprocess
@@ -226,14 +229,36 @@ def update_check_worker(cfg, stop_event, tg_send_fn=None):
     mid-network-call to wind down first.
     """
     import os
+    from pathlib import Path
+    import json as _json
 
     interval = getattr(cfg, "AUTO_UPDATE_CHECK_INTERVAL_SECS", 3600)
+    mode     = getattr(cfg, "AUTO_UPDATE_MODE", "notify_only")
 
     if not getattr(cfg, "AUTO_UPDATE_ENABLED", False):
         log.info("[UPDATE] AUTO_UPDATE_ENABLED is False — auto-updater not running")
         return
 
-    log.info(f"[UPDATE] Auto-updater active — checking every {interval}s")
+    log.info(f"[UPDATE] Auto-updater active — checking every {interval}s, mode={mode}")
+
+    # Tracks the remote commit hash we last sent a notify_only Telegram
+    # message for, so a pending update doesn't re-notify every single
+    # interval until the person actually acts on it — one notification per
+    # new commit, not one per hour it sits unaddressed.
+    last_notified_path = Path("logs/last_notified_commit.txt")
+
+    def _already_notified(commit: str) -> bool:
+        try:
+            return last_notified_path.exists() and last_notified_path.read_text().strip() == commit
+        except Exception:
+            return False
+
+    def _mark_notified(commit: str):
+        try:
+            last_notified_path.parent.mkdir(exist_ok=True)
+            last_notified_path.write_text(commit)
+        except Exception as e:
+            log.warning(f"[UPDATE] Could not save notified-commit marker: {e}")
 
     while not stop_event.wait(timeout=interval):
         try:
@@ -243,10 +268,39 @@ def update_check_worker(cfg, stop_event, tg_send_fn=None):
                     log.debug(f"[UPDATE] {result['reason']}")
                 continue
 
+            remote_commit = result["remote_commit"]
             log.info(f"[UPDATE] Update available: {result['local_commit'][:8]} "
-                     f"-> {result['remote_commit'][:8]}")
+                     f"-> {remote_commit[:8]}")
 
-            if getattr(cfg, "AUTO_UPDATE_REQUIRE_APPROVAL", False):
+            # ── notify_only (default): never pulls on its own, ever ───────
+            # Tells the person an update exists and exactly how to apply it
+            # whenever suits them — via /update in Telegram, or `git pull`
+            # by hand. Nothing on disk changes and nothing restarts unless
+            # they take that action themselves.
+            if mode == "notify_only":
+                if _already_notified(remote_commit):
+                    continue   # already told them about this exact commit — don't repeat
+                if tg_send_fn:
+                    tg_send_fn(
+                        f"🆕 <b>Update Available</b>\n━━━━━━━━━━━━━━━━\n"
+                        f"A new version is available on "
+                        f"{getattr(cfg,'AUTO_UPDATE_REMOTE','origin')}/"
+                        f"{getattr(cfg,'AUTO_UPDATE_BRANCH','main')}.\n\n"
+                        f"Current: <code>{result['local_commit'][:8]}</code>\n"
+                        f"New:     <code>{remote_commit[:8]}</code>\n\n"
+                        f"Nothing has changed yet — your bot keeps running "
+                        f"exactly as it is. When it's convenient, send "
+                        f"<b>/update</b> to apply it, or run <code>git pull</code> "
+                        f"yourself on the machine. You'll only see this "
+                        f"notice once for this version."
+                    )
+                _mark_notified(remote_commit)
+                log.info(f"[UPDATE] notify_only — told the user, taking no further action "
+                        f"until they send /update")
+                continue
+
+            # ── require_approval: same Y/N gate as strategy reviews ────────
+            if mode == "require_approval":
                 import approval_gate
                 outcome = approval_gate.request_approval(
                     change_type   = "auto_update",
@@ -256,7 +310,7 @@ def update_check_worker(cfg, stop_event, tg_send_fn=None):
                                     f"{getattr(cfg,'AUTO_UPDATE_BRANCH','main')}.",
                     why_change    = "Pulling updates the bot's code to the latest "
                                     "pushed version.",
-                    proposed      = {"commit": result["remote_commit"][:8]},
+                    proposed      = {"commit": remote_commit[:8]},
                     current       = {"commit": result["local_commit"][:8]},
                     confidence    = 100,
                     config        = cfg,
@@ -265,6 +319,7 @@ def update_check_worker(cfg, stop_event, tg_send_fn=None):
                     log.info(f"[UPDATE] Update not applied (outcome: {outcome})")
                     continue
 
+            # ── auto_apply (and require_approval after a Y) — pulls now ────
             applied = perform_update(cfg, tg_send_fn=tg_send_fn)
             if applied:
                 log.info("[UPDATE] Exiting process now so the watchdog relaunches on new code")

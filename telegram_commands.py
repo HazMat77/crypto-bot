@@ -119,6 +119,7 @@ class TelegramCommandHandler:
             "/status    — Pool balance, tier, open positions\n"
             "/heartbeat — On-demand heartbeat (pool, P&L, open positions)\n"
             "/version   — Bot version number\n"
+            "/update    — Check for and apply an available update now\n"
             "/trades    — Today's completed trades\n"
             "/daily     — Full daily P&L report\n"
             "/monthly   — This month's summary\n"
@@ -751,6 +752,51 @@ class TelegramCommandHandler:
             f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
+    def cmd_update(self):
+        """
+        Manual trigger for applying an update — the deliberate-action
+        counterpart to AUTO_UPDATE_MODE = "notify_only". Checks right now
+        (doesn't rely on any cached state from the background checker),
+        and if an update is genuinely available, pulls it and exits so the
+        watchdog relaunches the bot on the new code. If there's nothing
+        new, or anything blocks the pull (e.g. uncommitted local edits),
+        says so plainly and changes nothing.
+        """
+        try:
+            import auto_updater
+        except Exception as e:
+            self._send(f"⚠️ Auto-updater module not available: {e}")
+            return
+
+        self._send("🔍 Checking for updates now...")
+        result = auto_updater.check_for_update(self.config)
+
+        if not result["update_available"]:
+            self._send(
+                f"✅ <b>Already Up To Date</b>\n━━━━━━━━━━━━━━━━\n"
+                f"{result['reason'] or 'No update found.'}\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            return
+
+        self._send(
+            f"⬇️ <b>Update found — applying now</b>\n━━━━━━━━━━━━━━━━\n"
+            f"Current: <code>{result['local_commit'][:8]}</code>\n"
+            f"New:     <code>{result['remote_commit'][:8]}</code>\n"
+            f"Pulling and restarting — the watchdog will bring it back "
+            f"up automatically. You may see a brief 'unhealthy' alert "
+            f"during the restart window; that's expected."
+        )
+
+        applied = auto_updater.perform_update(self.config, tg_send_fn=self._send)
+        if applied:
+            log.info("[CMD] /update applied — exiting now so the watchdog relaunches on new code")
+            import os
+            os._exit(0)   # same reasoning as auto_updater.update_check_worker: only
+                           # os._exit reliably terminates the whole process from a
+                           # non-main thread (the Telegram command handler's own thread)
+        # if applied is False, perform_update has already sent the reason via tg_send_fn
+
     def _list_open_positions(self) -> list:
         """Returns [(ex_name, symbol, coin), ...] for every currently held position."""
         out = []
@@ -1184,6 +1230,7 @@ class TelegramCommandHandler:
         "/status":  "cmd_status",
         "/heartbeat":"cmd_heartbeat",
         "/version": "cmd_version",
+        "/update":  "cmd_update",
         "/trades":  "cmd_trades",
         "/daily":   "cmd_daily",
         "/monthly": "cmd_monthly",
