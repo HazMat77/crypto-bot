@@ -1463,6 +1463,14 @@ def run():
     # tracked and gets a worker thread like any normal position.
     startup_balance_check(mode)
 
+    # ── Attach WebSocket price feeds (KuCoin/Binance/Kraken/Bybit/OKX/Gate.io) ──
+    # Must happen after active_coins is populated so each feed subscribes to
+    # the exact symbols the bot will trade on that exchange.
+    for ex_name, exchange in EXCHANGES.items():
+        syms = list(active_coins.get(ex_name, []))
+        if syms:
+            exchange.attach_ws_feed(syms)
+
     tg_start(list(EXCHANGES.keys()), mode, tiers_info)
 
     stop_event = threading.Event()

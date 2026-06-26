@@ -19,6 +19,7 @@ import hashlib
 import base64
 import urllib.parse
 from datetime import datetime
+from ws_price_feed import build_ws_feed
 
 log = logging.getLogger(__name__)
 
@@ -48,13 +49,31 @@ class BaseExchange:
         self.name        = name
         self.credentials = credentials
         self.fee_rate    = EXCHANGE_FEES.get(name, 0.001)
+        self._ws_feed    = None   # set by attach_ws_feed() after construction
+
+    def attach_ws_feed(self, symbols: list):
+        """
+        Start a WebSocket price feed for this exchange.
+        Call this after construction, passing the list of symbols the bot will trade.
+        Exchanges without WS support (MEXC, Webull, VirgoCX) silently stay on REST.
+        """
+        self._ws_feed = build_ws_feed(self.name, symbols, self._rest_get_price)
+        if self._ws_feed:
+            log.info(f"[{self.name.upper()}] WebSocket price feed active")
+
+    def _rest_get_price(self, symbol: str) -> float:
+        """Subclass REST implementation — called by WS feed as fallback."""
+        raise NotImplementedError
 
     def normalize_symbol(self, symbol: str) -> str:
         """Override in subclass to convert BTC-USDT to exchange format."""
         return symbol
 
     def get_price(self, symbol: str) -> float:
-        raise NotImplementedError
+        """Return price from WS cache if fresh, else fall back to REST."""
+        if self._ws_feed:
+            return self._ws_feed.get_price(symbol)
+        return self._rest_get_price(symbol)
 
     def get_candles(self, symbol: str, interval: str, limit: int = 100):
         raise NotImplementedError
@@ -144,7 +163,7 @@ class KuCoinExchange(BaseExchange):
             self._version = "old"
 
     @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         return float(self.market.get_ticker(symbol)["price"])
 
     # Maps KuCoin interval strings to seconds, used to compute an explicit
@@ -286,7 +305,7 @@ class BinanceExchange(BaseExchange):
     def _headers(self):
         return {"X-MBX-APIKEY": self.credentials["api_key"]}
 
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         sym  = self.normalize_symbol(symbol)
         resp = requests.get(f"{self.BASE}/api/v3/ticker/price", params={"symbol": sym}, timeout=10)
         return float(resp.json()["price"])
@@ -416,7 +435,7 @@ class KrakenExchange(BaseExchange):
                              msg, hashlib.sha512)
         return base64.b64encode(sig.digest()).decode(), nonce
 
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         sym  = self.normalize_symbol(symbol)
         resp = requests.get(f"{self.BASE}/0/public/Ticker", params={"pair": sym}, timeout=10)
         data = resp.json()
@@ -500,7 +519,7 @@ class BybitExchange(BaseExchange):
         sig    = hmac.new(self.credentials["api_secret"].encode(), param_str.encode(), hashlib.sha256).hexdigest()
         return sig, ts
 
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         sym  = self.normalize_symbol(symbol)
         resp = requests.get(f"{self.BASE}/v5/market/tickers",
                             params={"category":"spot","symbol":sym}, timeout=10)
@@ -596,7 +615,7 @@ class OKXExchange(BaseExchange):
             "Content-Type":         "application/json",
         }
 
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         resp = requests.get(f"{self.BASE}/api/v5/market/ticker",
                             params={"instId": symbol}, timeout=10)
         return float(resp.json()["data"][0]["last"])
@@ -667,7 +686,7 @@ class GateIOExchange(BaseExchange):
         sig       = hmac.new(self.credentials["api_secret"].encode(), msg.encode(), hashlib.sha512).hexdigest()
         return {"KEY": self.credentials["api_key"], "Timestamp": ts, "SIGN": sig}
 
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         sym  = self.normalize_symbol(symbol)
         resp = requests.get(f"{self.BASE}/spot/tickers", params={"currency_pair": sym}, timeout=10)
         return float(resp.json()[0]["last"])
@@ -740,7 +759,7 @@ class MEXCExchange(BaseExchange):
         params["signature"] = sig
         return params
 
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         sym  = self.normalize_symbol(symbol)
         resp = requests.get(f"{self.BASE}/api/v3/ticker/price", params={"symbol":sym}, timeout=10)
         return float(resp.json()["price"])
@@ -875,7 +894,7 @@ class WebullExchange(BaseExchange):
         return f"{coin}USD"
 
     @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         sym  = self.normalize_symbol(symbol)
         resp = self.market.crypto.get_snapshot(symbols=[sym]).json()
         return float(resp["data"][0]["close"])
@@ -1011,7 +1030,7 @@ class VirgoCXExchange(BaseExchange):
         return f"{coin}/CAD"
 
     @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
-    def get_price(self, symbol):
+    def _rest_get_price(self, symbol):
         sym  = self.normalize_symbol(symbol)
         data = self.client.get_ticker_data(symbol=sym)
         return float(data["last"])
