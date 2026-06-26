@@ -379,14 +379,31 @@ class KrakenExchange(BaseExchange):
     def normalize_symbol(self, symbol):
         """
         Converts a normal "COIN-USDT" symbol into the exact pair code
-        Kraken's API expects (e.g. "DOGE-USDT" -> "XDGUSDT",
-        "AVAX-USDT" -> "AVAXUSDT" unchanged since AVAX has no legacy
-        prefix). Only rewrites the coin if it's an EXACT match against
-        LEGACY_COIN_TO_KRAKEN — never a substring match — so a ticker
-        like AVAX is never mistaken for containing a legacy code.
+        Kraken's API expects.
+
+        IMPORTANT, hard-won finding: Kraken's legacy X-prefix convention
+        (XETH, XXRP, XXMR, XLTC, etc.) applies to USD/EUR/native pairs,
+        but its USDT pairs use the PLAIN ticker with no prefix at all —
+        confirmed by direct inspection of Kraken's live AssetPairs data,
+        which shows keys like "ADAUSDT", "ALGOUSDT", "ALEOUSDT" with zero
+        prefix, for assets that DO carry an X-prefix on their USD pairs.
+        An earlier version of this fix applied LEGACY_COIN_TO_KRAKEN
+        unconditionally to all quote currencies, which produced
+        "XETHUSDT", "XXRPUSDT", etc. — pair codes Kraken's API doesn't
+        actually recognize for USDT markets, causing real "Invalid Pair"
+        failures even though the coin names themselves were correct.
+        Only Bitcoin (XBT) and Dogecoin (XDG) are confirmed to keep their
+        prefix even on USDT pairs, per direct observation against the
+        bot's actual production logs.
         """
         coin, _, quote = symbol.partition("-")
-        coin = self.LEGACY_COIN_TO_KRAKEN.get(coin, coin)
+        if quote.upper() == "USDT":
+            # USDT pairs: only BTC and DOGE need their prefix; everything
+            # else (including XMR, XRP, LTC, ETH, etc.) uses the plain ticker.
+            usdt_prefix_exceptions = {"BTC": "XBT", "DOGE": "XDG"}
+            coin = usdt_prefix_exceptions.get(coin, coin)
+        else:
+            coin = self.LEGACY_COIN_TO_KRAKEN.get(coin, coin)
         return f"{coin}{quote}"
 
     def _sign(self, path, data):
