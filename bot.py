@@ -626,6 +626,7 @@ def scaling_monitor(mode, stop_event):
                     with active_coins_lock:
                         active_coins[ex_name] = new_coins
                     current_tiers[ex_name] = new_tier["label"]
+                    exchange.resubscribe_ws_feed(new_coins)
                     tg_scale(ex_name, old_label, new_tier["label"], pool_usdt[ex_name], new_coins)
 
                 # ── Hourly news-based re-rank ──────────────────────────────
@@ -645,6 +646,7 @@ def scaling_monitor(mode, stop_event):
                         active_coins[ex_name] = new_coins
 
                     if added or removed:
+                        exchange.resubscribe_ws_feed(new_coins)
                         log.info(f"[{ex_name.upper()}] Coin list updated — "
                                 f"added: {added}, removed: {removed}")
                         _tg_coin_rerank(ex_name, new_coins, added, removed)

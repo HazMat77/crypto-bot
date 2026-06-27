@@ -79,11 +79,55 @@ class _WsFeed:
             if time.time() - ts < STALE_AFTER:
                 return price
             log.debug(f"[WS/{self._name}] {symbol} cache stale ({time.time()-ts:.1f}s) — REST fallback")
-        # WS stale or never received — use REST and update cache
+        # WS stale, never received, or never subscribed (e.g. a coin added
+        # after this feed started, before update_symbols() catches up) —
+        # use REST and update cache either way, so callers always get a
+        # real price regardless of WS subscription state.
         price = self._rest_fn(symbol)
         with self._lock:
             self._cache[symbol] = (price, time.time())
         return price
+
+    def update_symbols(self, symbols: list):
+        """
+        Updates the subscription list and forces a reconnect so the new
+        list takes effect immediately, rather than waiting for the next
+        natural disconnect. Safe to call from any thread — _loop() picks
+        up the new self._symbols the next time _connect() runs, since
+        every exchange's _connect() builds its subscribe message fresh
+        from self._symbols rather than capturing it once at construction.
+
+        Until the reconnect completes, get_price() for any newly-added
+        symbol simply falls through to REST (see get_price() above) —
+        there's no window where a new coin returns a wrong or stale price,
+        only a brief window where it's on REST instead of WS, exactly the
+        same as any exchange that has no WS feed at all.
+        """
+        new_set = set(symbols)
+        with self._lock:
+            old_set = set(self._symbols)
+            self._symbols = list(symbols)
+            # Drop cache entries for symbols no longer tracked, so a coin
+            # that gets removed and later re-added doesn't briefly serve a
+            # long-stale leftover price before its first fresh WS update —
+            # get_price() would otherwise see an "entry" that looks recent
+            # only by coincidence rather than reflecting anything current.
+            for sym in list(self._cache.keys()):
+                if sym not in new_set:
+                    del self._cache[sym]
+
+        added   = new_set - old_set
+        removed = old_set - new_set
+        if not added and not removed:
+            return   # nothing actually changed — skip the reconnect entirely
+
+        log.info(f"[WS/{self._name}] Symbol list changed (+{len(added)}/-{len(removed)}) "
+                f"— reconnecting to update subscription")
+        if self._ws:
+            try:
+                self._ws.close()   # _loop()'s reconnect picks up the new self._symbols
+            except Exception as e:
+                log.debug(f"[WS/{self._name}] close() during resubscribe: {e}")
 
     def _update(self, symbol: str, price: float):
         with self._lock:
@@ -224,11 +268,6 @@ class KrakenWsFeed(_WsFeed):
 
     def __init__(self, symbols: list, rest_fn):
         super().__init__("kraken", symbols, rest_fn)
-        # Build reverse map: "XBT/USDT" → "BTC-USDT"
-        self._kraken_to_canon = {}
-        for s in symbols:
-            k = self._to_kraken(s)
-            self._kraken_to_canon[k] = s
 
     def _to_kraken(self, symbol: str) -> str:
         coin, _, quote = symbol.partition("-")
@@ -237,7 +276,21 @@ class KrakenWsFeed(_WsFeed):
         return f"{coin}/{quote}"
 
     def _connect(self):
-        kraken_pairs = list(self._kraken_to_canon.keys())
+        # Rebuilt fresh on every connect (not cached at __init__) so a
+        # later update_symbols() call — which only changes self._symbols
+        # and forces a reconnect — actually takes effect here. Caching
+        # this map once at construction was the original bug: a coin
+        # added after startup would get added to self._symbols and
+        # reconnected, but incoming ticker messages for its Kraken pair
+        # would never resolve back to a canonical symbol, so it would
+        # silently sit on REST forever even after a successful WS
+        # reconnect — a more confusing failure than simply never having
+        # a WS feed, since logs would show "Subscribed" with no obvious
+        # reason prices weren't coming through.
+        kraken_to_canon = {}
+        for s in self._symbols:
+            kraken_to_canon[self._to_kraken(s)] = s
+        kraken_pairs = list(kraken_to_canon.keys())
 
         def on_open(ws):
             sub = {"event": "subscribe", "pair": kraken_pairs,
@@ -250,7 +303,7 @@ class KrakenWsFeed(_WsFeed):
             if isinstance(msg, list) and len(msg) >= 4 and msg[2] == "ticker":
                 pair  = msg[3]                          # e.g. "XBT/USDT"
                 price = msg[1]["c"][0]                  # last trade price
-                canon = self._kraken_to_canon.get(pair)
+                canon = kraken_to_canon.get(pair)
                 if canon and price:
                     self._update(canon, float(price))
 
@@ -365,10 +418,15 @@ class GateIOWsFeed(_WsFeed):
 
     def __init__(self, symbols: list, rest_fn):
         super().__init__("gateio", symbols, rest_fn)
-        self._gate_to_canon = {s.replace("-", "_"): s for s in symbols}
 
     def _connect(self):
-        gate_pairs = list(self._gate_to_canon.keys())
+        # Rebuilt fresh on every connect, not cached at __init__ — same
+        # reasoning as KrakenWsFeed._connect(): this must reflect
+        # self._symbols as it is NOW, including anything added via a
+        # later update_symbols() call, or newly-added coins would
+        # reconnect successfully but never have their prices recognized.
+        gate_to_canon = {s.replace("-", "_"): s for s in self._symbols}
+        gate_pairs = list(gate_to_canon.keys())
 
         def on_open(ws):
             sub = {"time": int(time.time()), "channel": "spot.tickers",
@@ -387,7 +445,7 @@ class GateIOWsFeed(_WsFeed):
                 pair  = r.get("currency_pair")          # "BTC_USDT"
                 price = r.get("last")
                 if pair and price:
-                    canon = self._gate_to_canon.get(pair)
+                    canon = gate_to_canon.get(pair)
                     if canon:
                         self._update(canon, float(price))
 

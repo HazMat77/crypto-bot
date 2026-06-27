@@ -61,6 +61,18 @@ class BaseExchange:
         if self._ws_feed:
             log.info(f"[{self.name.upper()}] WebSocket price feed active")
 
+    def resubscribe_ws_feed(self, symbols: list):
+        """
+        Call whenever active_coins for this exchange changes after startup
+        (tier change, hourly news re-rank) so the live feed's subscription
+        stays in sync with what the bot is actually trading. A no-op if
+        this exchange never had a WS feed attached (MEXC/Webull/VirgoCX,
+        or any exchange where attach_ws_feed() was never called) — those
+        always use REST anyway, so there's nothing to keep in sync.
+        """
+        if self._ws_feed:
+            self._ws_feed.update_symbols(symbols)
+
     def _rest_get_price(self, symbol: str) -> float:
         """Subclass REST implementation — called by WS feed as fallback."""
         raise NotImplementedError
