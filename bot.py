@@ -332,7 +332,16 @@ def tg_heartbeat(pools, positions, tc, tpnl, tiers, mode):
     sign  = "+" if tpnl >= 0 else ""
     arrow = "📈" if tpnl >= 0 else "📉"
     pool_lines = "\n".join([
-        f"  • {e.upper()}: ${b:.2f} ({tiers.get(e,{}).get('label','?')} — {tiers.get(e,{}).get('max_coins','?')} coins)"
+        # BUG FIX: this previously read tiers[e]['max_coins'] — the tier's
+        # CEILING (e.g. "Starter tier allows up to 15 coins"), not how many
+        # coins are actually being watched right now. On an exchange with
+        # fewer qualifying pairs than the ceiling (seen live: KuCoin found
+        # 257 candidates so its ceiling and real count looked similar by
+        # coincidence; Kraken found only 11, so the ceiling of 15 was
+        # actively wrong) this silently overstated the real watchlist size.
+        # tiers[e]['coins'] is the real len(coins) already computed at
+        # startup/re-rank time — see tiers_info construction in run().
+        f"  • {e.upper()}: ${b:.2f} ({tiers.get(e,{}).get('label','?')} — {tiers.get(e,{}).get('coins','?')} coins)"
         for e, b in pools.items()
     ])
     pos_lines = "".join([f"  • {k}: {'+'if v>=0 else ''}${v:.3f}\n" for k, v in positions.items()]) or "  None open\n"
@@ -1185,7 +1194,21 @@ def heartbeat_worker(mode, stop_event):
             continue
         try:
             open_pos = {}
-            tiers    = {ex: get_current_tier(ex) for ex in EXCHANGES}
+            tiers    = {}
+            for ex in EXCHANGES:
+                tier = get_current_tier(ex)
+                with active_coins_lock:
+                    # BUG FIX: get_current_tier() only returns the tier's
+                    # CEILING (max_coins) — it has no concept of how many
+                    # coins are actually being watched right now. Reading
+                    # the real, live active_coins length here (same source
+                    # /heartbeat already uses correctly) is what actually
+                    # fixes the discrepancy users would otherwise see
+                    # between the on-demand and scheduled heartbeat: e.g.
+                    # Kraken showing "15 coins" (the ceiling) when only 11
+                    # qualifying pairs actually exist right now.
+                    tier["coins"] = len(active_coins.get(ex, []))
+                tiers[ex] = tier
             for ex_name, exchange in EXCHANGES.items():
                 for sym, holding in coin_in_position[ex_name].items():
                     if holding:
