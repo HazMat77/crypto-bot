@@ -81,7 +81,7 @@ REGIME_STRATEGIES = {
         "description": "Mild bull — standard settings with slight bias to hold",
     },
     "SIDEWAYS": {
-        "rsi_buy":              33,    # tighter — only strong oversold signals
+        "rsi_buy":              40,    # was 33 — raised so signals actually fire in ranging markets
         "rsi_sell":             62,    # exit sooner — no trend to ride
         "stop_loss_pct":        0.05,  # tight stop — choppy = quick reversals, well under ceiling
         "take_profit_pct":      0.15,  # quick profit — don't wait for trend, smaller target than trending regimes
@@ -94,7 +94,7 @@ REGIME_STRATEGIES = {
         "description": "Choppy market — tight ranges, quick in/out, small sizes",
     },
     "BEAR_WEAK": {
-        "rsi_buy":              30,    # only extremely oversold
+        "rsi_buy":              35,    # was 30 — raised so signals fire in mild downtrends
         "rsi_sell":             58,    # exit quickly before more downside
         "stop_loss_pct":        0.06,  # 6% — conservative for a weakening market
         "take_profit_pct":      0.15,
@@ -107,7 +107,7 @@ REGIME_STRATEGIES = {
         "description": "Bear starting — conservative, fast exits, small sizes",
     },
     "BEAR_STRONG": {
-        "rsi_buy":              25,    # only extreme capitulation signals
+        "rsi_buy":              38,    # was 25 — too extreme, almost never fires; 38 still conservative but usable
         "rsi_sell":             55,    # exit very quickly
         "stop_loss_pct":        0.04,  # tightest of all regimes — protect capital in a strong bear
         "take_profit_pct":      0.10,  # take wins fast, don't get greedy in a downtrend

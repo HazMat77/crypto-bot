@@ -95,7 +95,7 @@ RSI_PERIOD = 14
 # PAPER TESTING:  RSI_BUY = 45, RSI_SELL = 55  (more signals to test with)
 # LIVE TRADING:   RSI_BUY = 35, RSI_SELL = 65  (conservative, less false signals)
 # Currently set for LIVE — change back to 45/55 if you want more paper test signals
-RSI_BUY    = 25
+RSI_BUY    = 45
 RSI_SELL   = 55
 
 # ── Moving Average ─────────────────────────────────────────────────────────
@@ -381,7 +381,7 @@ NEWS_COIN_RANKING = True
 # False = plain top-N ranking, no correlation check (faster, original behaviour)
 # Adds a small delay during coin discovery/re-rank (fetches price history
 # per candidate) — disable if discovery cycles feel slow on a weak connection.
-CORRELATION_AWARE_SELECTION = True
+CORRELATION_AWARE_SELECTION = False
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MONTHLY AI STRATEGY SELF-IMPROVEMENT
@@ -518,7 +518,7 @@ AGGRESSIVE_POOL_PCT    = 0.0    # Only used when DUAL_POOL_ENABLED=True — 50/5
 # Safe pool settings — these are the ACTIVE settings whenever
 # DUAL_POOL_ENABLED is False (the default), and also the "safe half"
 # whenever /aggressive is active.
-NORMAL_RSI_BUY         = 25
+NORMAL_RSI_BUY         = 45
 NORMAL_RSI_SELL        = 55
 NORMAL_STOP_LOSS       = 0.04    # 4% — measured from peak, see risk_manager.py
 NORMAL_TAKE_PROFIT     = 0.1    # 25% — from entry
@@ -534,8 +534,3 @@ AGGRESSIVE_TAKE_PROFIT = 0.25   # 25% — matches global target
 AGGRESSIVE_TRAILING_STOP = 0.04 # 4% trailing
 AGGRESSIVE_MAX_HOLD_HOURS = 24  # shorter hold — take profits faster
 
-# Auto-adapted to BEAR_STRONG regime (2026-06-26 15:22)
-
-# Auto-adapted to SIDEWAYS regime (2026-06-26 15:53)
-
-# Auto-adapted to BEAR_STRONG regime (2026-06-27 01:44)
