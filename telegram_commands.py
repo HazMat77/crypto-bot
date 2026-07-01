@@ -10,6 +10,8 @@ Available commands:
   /daily           — today's full daily report
   /monthly         — this month's full summary
   /coins           — which coins are currently being traded
+  /on              — enable AI analyst (filters signals by confidence)
+  /off             — disable AI analyst (trade on RSI/MA signals only)
   /pause           — pause all new buys (keeps monitoring)
   /resume          — resume trading after pause
   /stop            — gracefully stop the bot
@@ -133,6 +135,8 @@ class TelegramCommandHandler:
             "/autoapply — Auto-apply settings + recent changes\n"
             "/aggressive— Switch to aggressive mode (more trades, higher targets)\n"
             "/safe      — Switch to conservative mode (fewer, safer trades)\n"
+            "/on        — Enable AI analyst (vets signals before trading)\n"
+            "/off       — Disable AI analyst (trade on RSI/MA signals only)\n"
             "/sell      — Sell menu: all positions, or pick one coin\n"
             "/find      — Check now for new BTC/BCH/USDT deposits (live mode)\n"
             "/pause     — Pause new buys\n"
@@ -1185,6 +1189,35 @@ class TelegramCommandHandler:
         except Exception as e:
             self._send(f"{header}⚠️ Could not load history: {e}")
 
+    def cmd_ai_on(self):
+        try:
+            self._write_config_updates({"AI_ENABLED": True})
+            self._send(
+                "🧠 <b>AI Trading Enabled</b>\n━━━━━━━━━━━━━━━━\n"
+                "The AI analyst will now review buy signals before trades are placed.\n"
+                f"Signals below AI_CONFIDENCE_MIN ({getattr(self.config,'AI_CONFIDENCE_MIN',70)}%) will be skipped.\n\n"
+                "✅ <b>Live now</b> — no restart needed.\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            log.info("[CMD] AI enabled via Telegram /on")
+        except Exception as e:
+            self._send(f"⚠️ Could not enable AI: {e}")
+
+    def cmd_ai_off(self):
+        try:
+            self._write_config_updates({"AI_ENABLED": False})
+            self._send(
+                "🤖 <b>AI Trading Disabled</b>\n━━━━━━━━━━━━━━━━\n"
+                "Bot will now trade on RSI/MA signals alone — no AI filter.\n"
+                "Expect more signals to fire; they won't be vetted by AI confidence.\n\n"
+                "✅ <b>Live now</b> — no restart needed.\n"
+                "Send /on to re-enable AI at any time.\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            log.info("[CMD] AI disabled via Telegram /off")
+        except Exception as e:
+            self._send(f"⚠️ Could not disable AI: {e}")
+
     def cmd_pause(self):
         if self.pause_flag:
             self.pause_flag.set()
@@ -1246,6 +1279,8 @@ class TelegramCommandHandler:
         "/safe":    "cmd_safe",
         "/sell":    "cmd_sell_all",
         "/find":    "cmd_find_deposits",
+        "/on":      "cmd_ai_on",
+        "/off":     "cmd_ai_off",
         "/pause":   "cmd_pause",
         "/resume":  "cmd_resume",
         "/stop":    "cmd_stop",
