@@ -1095,6 +1095,209 @@ class VirgoCXExchange(BaseExchange):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  COINBASE (Advanced Trade API v3 — JWT / EC-key auth)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  Credentials needed (generate at https://www.coinbase.com/settings/api):
+#    api_key    — API key name, format: organizations/{org_id}/apiKeys/{key_id}
+#    api_secret — EC private key in PEM format
+#                 (full -----BEGIN EC PRIVATE KEY----- block, newlines preserved)
+#
+#  Requires: pip install cryptography
+#
+#  Symbol format: Coinbase uses BTC-USDT natively — no conversion needed.
+#  Note: Coinbase primarily lists USD pairs (BTC-USD). USDT pairs exist but
+#  tend to be thinner than on Binance/KuCoin — check liquidity before trading.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class CoinbaseExchange(BaseExchange):
+    BASE = "https://api.coinbase.com"
+
+    def __init__(self, credentials):
+        super().__init__("coinbase", credentials)
+
+    def normalize_symbol(self, symbol):
+        return symbol   # Coinbase uses BTC-USDT natively
+
+    def _jwt(self, method, path):
+        """Build a per-request JWT for Coinbase Advanced Trade API auth."""
+        try:
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import ec
+            from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+            from cryptography.hazmat.backends import default_backend
+        except ImportError:
+            raise ImportError(
+                "Coinbase adapter requires the 'cryptography' package. "
+                "Run: pip install cryptography"
+            )
+        import json as _json
+
+        key_name = self.credentials["api_key"]
+        pem      = self.credentials["api_secret"]
+        if isinstance(pem, str):
+            pem = pem.encode()
+
+        private_key = serialization.load_pem_private_key(
+            pem, password=None, backend=default_backend()
+        )
+
+        now  = int(time.time())
+        hdr  = {"alg": "ES256", "kid": key_name}
+        body = {
+            "sub": key_name,
+            "iss": "coinbase-cloud",
+            "nbf": now,
+            "exp": now + 120,
+            "aud": ["retail_rest_api_proxy"],
+            "uri": f"{method} api.coinbase.com{path}",
+        }
+
+        def _b64url(obj):
+            return base64.urlsafe_b64encode(
+                _json.dumps(obj, separators=(",", ":")).encode()
+            ).rstrip(b"=").decode()
+
+        signing_input = f"{_b64url(hdr)}.{_b64url(body)}".encode()
+        der_sig = private_key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+        r, s    = decode_dss_signature(der_sig)
+        raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+        sig_b64 = base64.urlsafe_b64encode(raw_sig).rstrip(b"=").decode()
+
+        return f"{_b64url(hdr)}.{_b64url(body)}.{sig_b64}"
+
+    def _auth_headers(self, method, path):
+        return {
+            "Authorization": f"Bearer {self._jwt(method, path)}",
+            "Content-Type":  "application/json",
+        }
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def _rest_get_price(self, symbol):
+        path = "/api/v3/brokerage/best_bid_ask"
+        resp = requests.get(
+            f"{self.BASE}{path}",
+            params={"product_ids": symbol},
+            headers=self._auth_headers("GET", path),
+            timeout=10,
+        )
+        pricebooks = resp.json().get("pricebooks", [])
+        if not pricebooks:
+            raise ValueError(f"Coinbase: no pricebook for {symbol}")
+        book = pricebooks[0]
+        asks, bids = book.get("asks", []), book.get("bids", [])
+        if asks and bids:
+            return (float(asks[0]["price"]) + float(bids[0]["price"])) / 2
+        elif asks:
+            return float(asks[0]["price"])
+        elif bids:
+            return float(bids[0]["price"])
+        raise ValueError(f"Coinbase: empty order book for {symbol}")
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_candles(self, symbol, interval="15min", limit=100):
+        import pandas as pd
+        granularity_map = {
+            "1min":  "ONE_MINUTE",     "5min":  "FIVE_MINUTE",
+            "15min": "FIFTEEN_MINUTE", "30min": "THIRTY_MINUTE",
+            "1hour": "ONE_HOUR",       "2hour": "TWO_HOUR",
+            "4hour": "TWO_HOUR",       "6hour": "SIX_HOUR",
+            "1day":  "ONE_DAY",
+        }
+        secs_map = {
+            "ONE_MINUTE": 60,  "FIVE_MINUTE": 300,  "FIFTEEN_MINUTE": 900,
+            "THIRTY_MINUTE": 1800, "ONE_HOUR": 3600, "TWO_HOUR": 7200,
+            "SIX_HOUR": 21600, "ONE_DAY": 86400,
+        }
+        gran  = granularity_map.get(interval, "FIFTEEN_MINUTE")
+        end   = int(time.time())
+        start = end - secs_map[gran] * limit
+        path  = f"/api/v3/brokerage/products/{symbol}/candles"
+        resp  = requests.get(
+            f"{self.BASE}{path}",
+            params={"start": str(start), "end": str(end),
+                    "granularity": gran, "limit": min(limit, 300)},
+            headers=self._auth_headers("GET", path),
+            timeout=10,
+        )
+        candles = resp.json().get("candles", [])
+        if not candles:
+            raise ValueError(f"Coinbase: no candles for {symbol}")
+        # Coinbase returns newest-first — reverse to chronological order
+        df = pd.DataFrame(list(reversed(candles)))
+        df = df.rename(columns={"start": "time"})
+        return df.astype({"open": float, "close": float,
+                          "high": float, "low": float, "volume": float})
+
+    def place_market_buy(self, symbol, usdt_amount):
+        import json as _json
+        path = "/api/v3/brokerage/orders"
+        body = _json.dumps({
+            "client_order_id": f"bot_{int(time.time() * 1000)}",
+            "product_id": symbol,
+            "side": "BUY",
+            "order_configuration": {
+                "market_market_ioc": {"quote_size": str(round(usdt_amount, 2))}
+            },
+        })
+        resp = requests.post(
+            f"{self.BASE}{path}", data=body,
+            headers=self._auth_headers("POST", path), timeout=10,
+        )
+        return resp.json()
+
+    def place_market_sell(self, symbol, qty):
+        import json as _json
+        path = "/api/v3/brokerage/orders"
+        body = _json.dumps({
+            "client_order_id": f"bot_{int(time.time() * 1000)}",
+            "product_id": symbol,
+            "side": "SELL",
+            "order_configuration": {
+                "market_market_ioc": {"base_size": str(qty)}
+            },
+        })
+        resp = requests.post(
+            f"{self.BASE}{path}", data=body,
+            headers=self._auth_headers("POST", path), timeout=10,
+        )
+        return resp.json()
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_usdt_balance(self):
+        return self._fetch_balance("USDT")
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_coin_balance(self, coin):
+        return self._fetch_balance(coin)
+
+    def _fetch_balance(self, currency):
+        path     = "/api/v3/brokerage/accounts"
+        resp     = requests.get(f"{self.BASE}{path}",
+                                headers=self._auth_headers("GET", path), timeout=10)
+        accounts = resp.json().get("accounts", [])
+        match    = next((a for a in accounts if a.get("currency") == currency), None)
+        return float(match["available_balance"]["value"]) if match else 0.0
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_all_balances(self):
+        path     = "/api/v3/brokerage/accounts"
+        resp     = requests.get(f"{self.BASE}{path}",
+                                headers=self._auth_headers("GET", path), timeout=10)
+        accounts = resp.json().get("accounts", [])
+        balances = {}
+        for acct in accounts:
+            currency = acct.get("currency")
+            try:
+                val = float(acct["available_balance"]["value"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if val > 0 and currency:
+                balances[currency] = balances.get(currency, 0.0) + val
+        return balances
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  FACTORY — returns the right adapter for each exchange name
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1104,19 +1307,20 @@ def build_exchanges(exchange_config: dict) -> dict:
     Returns dict: { "kucoin": KuCoinExchange, "binance": BinanceExchange, ... }
     """
     adapters = {
-        "kucoin":   KuCoinExchange,
-        "binance":  BinanceExchange,
-        "kraken":   KrakenExchange,
-        "bybit":    BybitExchange,
-        "okx":      OKXExchange,
-        "gateio":   GateIOExchange,
-        "mexc":     MEXCExchange,
-        "webull":   WebullExchange,
-        "virgocx":  VirgoCXExchange,
+        "kucoin":    KuCoinExchange,
+        "binance":   BinanceExchange,
+        "kraken":    KrakenExchange,
+        "bybit":     BybitExchange,
+        "okx":       OKXExchange,
+        "gateio":    GateIOExchange,
+        "mexc":      MEXCExchange,
+        "webull":    WebullExchange,
+        "virgocx":   VirgoCXExchange,
+        "coinbase":  CoinbaseExchange,
     }
 
     # Exchanges not yet fully implemented — log clearly
-    not_implemented = ["coinbase", "bitget", "huobi"]
+    not_implemented = ["bitget", "huobi"]
 
     result = {}
     for name, cfg in exchange_config.items():
