@@ -46,6 +46,11 @@ except ImportError:
         "Run: cp bot_secrets.example.py bot_secrets.py   then fill in your real keys."
     )
 
+# Keys added after initial release — use getattr so older bot_secrets.py
+# files that predate these fields don't crash on startup.
+_coinbase_key    = getattr(_secrets, "COINBASE_API_KEY",    "")
+_coinbase_secret = getattr(_secrets, "COINBASE_API_SECRET", "")
+
 # ── SAFETY ────────────────────────────────────────────────────────────────
 PAPER_TRADING        = True    # True = simulation only. False = real money.
 PAPER_STARTING_USDT  = 100.0   # Starting pool per exchange (paper mode)
@@ -264,8 +269,8 @@ EXCHANGES = {
 
     "coinbase": {
         "enabled":    False,
-        "api_key":    _secrets.COINBASE_API_KEY,    # API key name from coinbase.com/settings/api
-        "api_secret": _secrets.COINBASE_API_SECRET, # EC private key (full PEM block)
+        "api_key":    _coinbase_key,    # API key name from coinbase.com/settings/api
+        "api_secret": _coinbase_secret, # EC private key (full PEM block)
         # To get credentials:
         #   1. Go to https://www.coinbase.com/settings/api
         #   2. Create a new API key → choose "Advanced Trade" permissions
