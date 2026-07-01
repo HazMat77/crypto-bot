@@ -458,6 +458,50 @@ class GateIOWsFeed(_WsFeed):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  COINBASE
+# ══════════════════════════════════════════════════════════════════════════════
+
+class CoinbaseWsFeed(_WsFeed):
+    """
+    Coinbase Advanced Trade public WebSocket — ticker channel.
+    No authentication required for market data.
+    Symbol format: BTC-USDT (matches internal format — no conversion needed).
+    Price field: events[].tickers[].price
+    """
+
+    def __init__(self, symbols: list, rest_fn):
+        super().__init__("coinbase", symbols, rest_fn)
+
+    def _connect(self):
+        def on_open(ws):
+            sub = {
+                "type":        "subscribe",
+                "product_ids": list(self._symbols),
+                "channel":     "ticker",
+            }
+            ws.send(json.dumps(sub))
+            log.info(f"[WS/coinbase] Subscribed to {len(self._symbols)} symbol(s)")
+
+        def on_message(ws, message):
+            msg = json.loads(message)
+            if msg.get("channel") != "ticker":
+                return
+            for event in msg.get("events", []):
+                for ticker in event.get("tickers", []):
+                    product_id = ticker.get("product_id")
+                    price      = ticker.get("price")
+                    if product_id and price:
+                        self._update(product_id, float(price))
+
+        self._ws = websocket.WebSocketApp(
+            "wss://advanced-trade-ws.coinbase.com/ws/1",
+            on_open=on_open, on_message=on_message,
+            on_error=self._on_error, on_close=self._on_close,
+        )
+        self._ws.run_forever(ping_interval=30)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  FACTORY
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -467,12 +511,13 @@ def build_ws_feed(exchange_name: str, symbols: list, rest_fn):
     exchange has no WebSocket support (MEXC, Webull, VirgoCX stay on REST).
     """
     mapping = {
-        "kucoin":  KuCoinWsFeed,
-        "binance": BinanceWsFeed,
-        "kraken":  KrakenWsFeed,
-        "bybit":   BybitWsFeed,
-        "okx":     OKXWsFeed,
-        "gateio":  GateIOWsFeed,
+        "kucoin":    KuCoinWsFeed,
+        "binance":   BinanceWsFeed,
+        "kraken":    KrakenWsFeed,
+        "bybit":     BybitWsFeed,
+        "okx":       OKXWsFeed,
+        "gateio":    GateIOWsFeed,
+        "coinbase":  CoinbaseWsFeed,
     }
     cls = mapping.get(exchange_name)
     if cls is None:

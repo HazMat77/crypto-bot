@@ -242,10 +242,11 @@ class Dashboard:
         self.t_normal    = MetricTile(metrics, "NORMAL 80%")
         self.t_aggr      = MetricTile(metrics, "AGGRESSIVE 20%")
         self.t_trades    = MetricTile(metrics, "TRADES TODAY")
-        self.t_pnl       = MetricTile(metrics, "NET P&L")
-        self.t_wr        = MetricTile(metrics, "WIN RATE")
-        for t in (self.t_pool,self.t_normal,self.t_aggr,
-                  self.t_trades,self.t_pnl,self.t_wr):
+        self.t_pnl       = MetricTile(metrics, "NET P&L TODAY")
+        self.t_gain      = MetricTile(metrics, "% GAIN TODAY")
+        self.t_wr        = MetricTile(metrics, "WIN RATE TODAY")
+        for t in (self.t_pool, self.t_normal, self.t_aggr,
+                  self.t_trades, self.t_pnl, self.t_gain, self.t_wr):
             t.pack(side="left", fill="both", expand=True, padx=4)
 
         # Lower section
@@ -549,15 +550,37 @@ class Dashboard:
                     if "SELL" in line and "Net" in line: trades.append(line.strip())
                     elif "SIGNAL" in line or "ENGINE" in line: signals.append(line.strip())
 
-        wins   = sum(1 for t in trades if "+$" in t)
+        wins   = sum(1 for t in trades if "Net +$" in t)
         losses = len(trades) - wins
         wr_str = f"{wins/len(trades)*100:.0f}%" if trades else "—"
 
+        # Parse net P&L from each SELL log line to compute daily ROI
+        net_pnl = 0.0
+        for t in trades:
+            m = re.search(r'Net ([+-])\$([0-9.]+)', t)
+            if m:
+                net_pnl += (1 if m.group(1) == "+" else -1) * float(m.group(2))
+
+        try:
+            import config as _cfg
+            importlib.reload(_cfg)
+            starting = _cfg.PAPER_STARTING_USDT
+        except Exception:
+            starting = 100.0
+        gain_pct  = (net_pnl / starting * 100) if starting > 0 else 0
+        gain_str  = f"{'+' if gain_pct >= 0 else ''}{gain_pct:.2f}%"
+        pnl_str   = f"{'+' if net_pnl >= 0 else ''}${net_pnl:.4f}"
+        gain_col  = C["green"] if gain_pct >= 0 else C["red"]
+
         self.root.after(0, lambda: self.t_trades.set(str(len(trades))))
-        self.root.after(0, lambda: self.t_wr.set(wr_str, f"{wins}W {losses}L",
-                                                  C["green"] if wins>=losses else C["red"]))
+        self.root.after(0, lambda: self.t_pnl.set(pnl_str, "net after fees", gain_col))
+        self.root.after(0, lambda: self.t_gain.set(gain_str,
+                                                    f"on ${starting:.0f} pool", gain_col))
+        self.root.after(0, lambda: self.t_wr.set(wr_str, f"{wins}W  {losses}L",
+                                                  C["green"] if wins >= losses else C["red"]))
         self.root.after(0, lambda: self.trade_summary_lbl.configure(
-            text=f"{len(trades)} trades  ·  {wins} wins  ·  {losses} losses  ·  {wr_str} win rate"))
+            text=(f"{len(trades)} trades  ·  {wins}W {losses}L  ·  {wr_str} win rate  ·  "
+                  f"Net {pnl_str}  ·  ROI {gain_str}")))
 
         self.root.after(0, lambda: self._populate_signals(signals[-30:]))
 

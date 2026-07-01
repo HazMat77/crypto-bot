@@ -54,6 +54,14 @@ WEBULL_API_SECRET   = ""
 VIRGOCX_API_KEY     = ""
 VIRGOCX_API_SECRET  = ""
 
+# Coinbase Advanced Trade API — generate at https://www.coinbase.com/settings/api
+# api_key    = API key NAME (format: organizations/{org_id}/apiKeys/{key_id})
+# api_secret = full EC private key PEM block (-----BEGIN EC PRIVATE KEY----- ... -----END EC PRIVATE KEY-----)
+#              Paste the entire multi-line block as a single string with \n newlines,
+#              or use a triple-quoted string in bot_secrets.py.
+COINBASE_API_KEY    = ""
+COINBASE_API_SECRET = ""
+
 # ── Telegram ─────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN    = "YOUR_TELEGRAM_BOT_TOKEN"
 TELEGRAM_CHAT_ID  = "YOUR_TELEGRAM_CHAT_ID"

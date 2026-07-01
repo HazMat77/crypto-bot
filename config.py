@@ -35,6 +35,7 @@ except ImportError:
         MEXC_API_KEY = MEXC_API_SECRET = ""
         WEBULL_API_KEY = WEBULL_API_SECRET = ""
         VIRGOCX_API_KEY = VIRGOCX_API_SECRET = ""
+        COINBASE_API_KEY = COINBASE_API_SECRET = ""
         TELEGRAM_TOKEN   = "YOUR_TELEGRAM_BOT_TOKEN"
         TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
         AI_API_KEY   = "YOUR_ANTHROPIC_API_KEY_HERE"
@@ -259,6 +260,25 @@ EXCHANGES = {
         # reading pool size / profit numbers for this exchange.
         #
         # Requires: pip install vcx-py
+    },
+
+    "coinbase": {
+        "enabled":    False,
+        "api_key":    _secrets.COINBASE_API_KEY,    # API key name from coinbase.com/settings/api
+        "api_secret": _secrets.COINBASE_API_SECRET, # EC private key (full PEM block)
+        # To get credentials:
+        #   1. Go to https://www.coinbase.com/settings/api
+        #   2. Create a new API key → choose "Advanced Trade" permissions
+        #      (View + Trade — NOT Withdraw)
+        #   3. Copy the "API Key Name" (format: organizations/.../apiKeys/...)
+        #      into COINBASE_API_KEY in bot_secrets.py
+        #   4. Copy the full EC private key (the -----BEGIN EC PRIVATE KEY-----
+        #      block, newlines included) into COINBASE_API_SECRET
+        #
+        # NOTE: Coinbase USDT pairs (BTC-USDT etc.) are supported but less
+        # liquid than their USD equivalents. This bot trades USDT pairs only.
+        #
+        # Requires: pip install cryptography
     },
 }
 
