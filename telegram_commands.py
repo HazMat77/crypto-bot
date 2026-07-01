@@ -123,8 +123,9 @@ class TelegramCommandHandler:
             "/version   — Bot version number\n"
             "/update    — Check for and apply an available update now\n"
             "/trades    — Today's completed trades\n"
-            "/daily     — Full daily P&L report\n"
-            "/monthly   — This month's summary\n"
+            "/daily     — Full daily P&L report (with ROI%)\n"
+            "/weekly    — This week's summary (with ROI% + win rate)\n"
+            "/monthly   — This month's summary (with ROI% + win rate)\n"
             "/coins     — Active trading coins\n"
             "/news      — Latest crypto headlines\n"
             "/score     — News sentiment scores\n"
@@ -270,17 +271,21 @@ class TelegramCommandHandler:
                           f"      Gross {sg}${s['gross']:.4f}  Fee -${s['fees']:.4f}  "
                           f"Net <b>{sn}${s['net']:.4f}</b>\n")
 
-        sign  = "+" if net >= 0 else ""
-        arrow = "📈" if net >= 0 else "📉"
+        sign     = "+" if net >= 0 else ""
+        arrow    = "📈" if net >= 0 else "📉"
+        starting = getattr(self.config, "PAPER_STARTING_USDT", 100.0)
+        roi      = (net / starting * 100) if starting > 0 else 0
+        sign_roi = "+" if roi >= 0 else ""
 
         self._send(
             f"🌙 <b>Daily Report — {today}</b>\n━━━━━━━━━━━━━━━━\n"
             f"Mode: {mode}\n\n"
-            f"📊 {num} trades  ✅ {len(wins)} wins  ❌ {num-len(wins)} losses  🎯 {wr:.0f}%\n\n"
+            f"📊 {num} trades  ✅ {len(wins)} wins  ❌ {num-len(wins)} losses  🎯 {wr:.0f}% win rate\n\n"
             f"💵 Gross:  {'+' if gross>=0 else ''}${gross:.4f}\n"
             f"💸 Fees:   -${fees:.4f}\n"
             f"━━━━━━━━━━━━━━━━\n"
-            f"{arrow} <b>Net: {sign}${net:.4f} USDT</b>\n\n"
+            f"{arrow} <b>Net: {sign}${net:.4f} USDT</b>\n"
+            f"📊 <b>ROI: {sign_roi}{roi:.2f}% on ${starting:.0f} starting pool</b>\n\n"
             f"📌 <b>By coin:</b>\n{coin_lines}"
             f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
@@ -330,8 +335,11 @@ class TelegramCommandHandler:
                           f"      Gross {sg}${s['gross']:.4f}  Fee -${s['fees']:.4f}  "
                           f"Net <b>{sn}${s['net']:.4f}</b>\n")
 
-        sign  = "+" if net >= 0 else ""
-        arrow = "📈" if net >= 0 else "📉"
+        sign     = "+" if net >= 0 else ""
+        arrow    = "📈" if net >= 0 else "📉"
+        starting = getattr(self.config, "PAPER_STARTING_USDT", 100.0)
+        roi      = (net / starting * 100) if starting > 0 else 0
+        sign_roi = "+" if roi >= 0 else ""
 
         # Pool balances
         pool_lines = "\n".join([f"  • {e.upper()}: ${b:.2f}" for e, b in self.pool_usdt.items()])
@@ -341,12 +349,12 @@ class TelegramCommandHandler:
             f"Mode: {mode}\n\n"
             f"📊 <b>Totals:</b>\n"
             f"  Trades:   {num}\n"
-            f"  Win rate: {wr:.0f}%\n"
-            f"  Wins/Losses: {len(wins)}/{num-len(wins)}\n\n"
+            f"  Win rate: {wr:.0f}% ({len(wins)} wins / {num-len(wins)} losses)\n\n"
             f"💵 Gross P&L:  {'+' if gross>=0 else ''}${gross:.4f}\n"
             f"💸 Total fees: -${fees:.4f}\n"
             f"━━━━━━━━━━━━━━━━\n"
-            f"{arrow} <b>Net profit: {sign}${net:.4f} USDT</b>\n\n"
+            f"{arrow} <b>Net profit: {sign}${net:.4f} USDT</b>\n"
+            f"📊 <b>ROI: {sign_roi}{roi:.2f}% on ${starting:.0f} starting pool</b>\n\n"
             f"🏆 Best trade:  {best['coin']} net +${best.get('pnl_net',0):.4f} "
             f"(gross +${best.get('pnl_gross',0):.4f}, fee -${best.get('fees',0):.4f})\n"
             f"💔 Worst trade: {worst['coin']} net ${worst.get('pnl_net',0):.4f} "
@@ -1189,6 +1197,85 @@ class TelegramCommandHandler:
         except Exception as e:
             self._send(f"{header}⚠️ Could not load history: {e}")
 
+    def cmd_weekly(self):
+        with self.monthly_lock:
+            all_trades = list(self.monthly_trades)
+
+        # Filter to current ISO week using the date field stored on each trade
+        today    = date.today()
+        iso_year, iso_week, _ = today.isocalendar()
+        trades = []
+        for t in all_trades:
+            try:
+                t_date = date.fromisoformat(t.get("date", ""))
+                ty, tw, _ = t_date.isocalendar()
+                if ty == iso_year and tw == iso_week:
+                    trades.append(t)
+            except (ValueError, AttributeError, TypeError):
+                pass
+
+        week_label = f"Week {iso_week}, {today.strftime('%Y')} ({today.strftime('%b %d')} week)"
+        mode       = "📄 PAPER" if self.config.PAPER_TRADING else "💰 LIVE"
+        starting   = getattr(self.config, "PAPER_STARTING_USDT", 100.0)
+
+        if not trades:
+            self._send(
+                f"📅 <b>Weekly Report — {week_label}</b>\n━━━━━━━━━━━━━━━━\n"
+                f"Mode: {mode}\nNo trades this week yet.\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            return
+
+        num   = len(trades)
+        wins  = [t for t in trades if t.get("pnl_gross", 0) >= 0]
+        gross = sum(t.get("pnl_gross", 0) for t in trades)
+        fees  = sum(t.get("fees", 0)      for t in trades)
+        net   = gross - fees
+        wr    = len(wins) / num * 100
+        roi   = (net / starting * 100) if starting > 0 else 0
+
+        best  = max(trades, key=lambda t: t.get("pnl_net", 0))
+        worst = min(trades, key=lambda t: t.get("pnl_net", 0))
+
+        coin_stats = {}
+        for t in trades:
+            k = t["coin"]
+            coin_stats.setdefault(k, {"n": 0, "gross": 0.0, "fees": 0.0, "net": 0.0})
+            coin_stats[k]["n"]     += 1
+            coin_stats[k]["gross"] += t.get("pnl_gross", 0)
+            coin_stats[k]["fees"]  += t.get("fees", 0)
+            coin_stats[k]["net"]   += t.get("pnl_net", 0)
+
+        top_coins = sorted(coin_stats.items(), key=lambda x: x[1]["net"], reverse=True)[:5]
+        coin_lines = ""
+        for k, s in top_coins:
+            sg = "+" if s["gross"] >= 0 else ""
+            sn = "+" if s["net"]   >= 0 else ""
+            coin_lines += (f"  • {k} ({s['n']} trades)\n"
+                          f"      Gross {sg}${s['gross']:.4f}  Fee -${s['fees']:.4f}  "
+                          f"Net <b>{sn}${s['net']:.4f}</b>\n")
+
+        sign     = "+" if net >= 0 else ""
+        sign_roi = "+" if roi >= 0 else ""
+        arrow    = "📈" if net >= 0 else "📉"
+
+        self._send(
+            f"📅 <b>Weekly Report — {week_label}</b>\n━━━━━━━━━━━━━━━━\n"
+            f"Mode: {mode}\n\n"
+            f"📊 <b>Totals:</b>\n"
+            f"  Trades:   {num}\n"
+            f"  Win rate: {wr:.0f}% ({len(wins)} wins / {num-len(wins)} losses)\n\n"
+            f"💵 Gross P&L:  {'+' if gross>=0 else ''}${gross:.4f}\n"
+            f"💸 Total fees: -${fees:.4f}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"{arrow} <b>Net: {sign}${net:.4f} USDT</b>\n"
+            f"📊 <b>ROI: {sign_roi}{roi:.2f}% on ${starting:.0f} starting pool</b>\n\n"
+            f"🏆 Best trade:  {best['coin']} net +${best.get('pnl_net',0):.4f}\n"
+            f"💔 Worst trade: {worst['coin']} net ${worst.get('pnl_net',0):.4f}\n\n"
+            f"📌 <b>Top coins:</b>\n{coin_lines}"
+            f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
     def cmd_ai_on(self):
         try:
             self._write_config_updates({"AI_ENABLED": True})
@@ -1266,6 +1353,7 @@ class TelegramCommandHandler:
         "/update":  "cmd_update",
         "/trades":  "cmd_trades",
         "/daily":   "cmd_daily",
+        "/weekly":  "cmd_weekly",
         "/monthly": "cmd_monthly",
         "/coins":   "cmd_coins",
         "/news":    "cmd_news",
