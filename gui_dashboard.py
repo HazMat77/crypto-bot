@@ -274,8 +274,8 @@ class Dashboard:
         metrics.pack(fill="x", padx=16, pady=(16,8))
 
         self.t_pool      = MetricTile(metrics, "TOTAL POOL")
-        self.t_normal    = MetricTile(metrics, "NORMAL 80%")
-        self.t_aggr      = MetricTile(metrics, "AGGRESSIVE 20%")
+        self.t_normal    = MetricTile(metrics, "NORMAL POOL")
+        self.t_aggr      = MetricTile(metrics, "AGGRESSIVE POOL")
         self.t_trades    = MetricTile(metrics, "TRADES TODAY")
         self.t_pnl       = MetricTile(metrics, "NET P&L TODAY")
         self.t_gain      = MetricTile(metrics, "% GAIN TODAY")
@@ -344,13 +344,15 @@ class Dashboard:
         detail_row.pack(fill="both", expand=True, padx=16, pady=8)
 
         # Normal card
-        nc = Card(detail_row, title="🟢  NORMAL POOL  —  80%  —  Conservative")
+        nc = Card(detail_row, title="🟢  NORMAL POOL")
         nc.pack(side="left", fill="both", expand=True, padx=(0,6))
+        self.normal_card  = nc
         self.normal_table = self._make_kv_table(nc)
 
         # Aggressive card
-        ac = Card(detail_row, title="🔴  AGGRESSIVE POOL  —  20%  —  Higher Risk/Reward")
+        ac = Card(detail_row, title="🔴  AGGRESSIVE POOL")
         ac.pack(side="left", fill="both", expand=True, padx=(6,0))
+        self.aggr_card  = ac
         self.aggr_table = self._make_kv_table(ac)
 
         # Engine status card
@@ -754,11 +756,14 @@ class Dashboard:
             res   = getattr(cfg, "LISTING_RESERVE_USDT", 5.0)
 
             self.root.after(0, lambda: self.t_pool.set(f"${pool:.2f}", "USDT total"))
-            self.root.after(0, lambda: self.t_normal.set(f"${pool*norm:.2f}",
-                                                         f"{norm*100:.0f}% conservative"))
-            self.root.after(0, lambda: self.t_aggr.set(f"${pool*aggr:.2f}",
-                                                        f"{aggr*100:.0f}% aggressive",
-                                                        C["orange"]))
+            norm_pct = f"{norm*100:.0f}%"
+            aggr_pct = f"{aggr*100:.0f}%"
+            self.root.after(0, lambda np=norm_pct: self.t_normal.set(f"${pool*norm:.2f}", f"{np} conservative"))
+            self.root.after(0, lambda ap=aggr_pct: self.t_aggr.set(f"${pool*aggr:.2f}", f"{ap} aggressive", C["orange"]))
+            self.root.after(0, lambda np=norm_pct: self.normal_card.configure(
+                text=f"🟢  NORMAL POOL  —  {np}  —  Conservative") if hasattr(self.normal_card, 'configure') else None)
+            self.root.after(0, lambda ap=aggr_pct: self.aggr_card.configure(
+                text=f"🔴  AGGRESSIVE POOL  —  {ap}  —  Higher Risk/Reward") if hasattr(self.aggr_card, 'configure') else None)
             # Update pool bar — cached so _nav() can redraw it once the
             # canvas is actually visible/mapped (drawing while the Pools
             # tab is hidden reports a bogus 1px width and draws nothing).
@@ -1161,17 +1166,20 @@ class Dashboard:
         self.log_text.see("end")
 
     def _preset_conservative(self):
-        self._apply_preset(35,65,0.05,0.05, 40,60,0.07,0.07, "Conservative")
+        self._apply_preset(35,65,0.05,0.05, 40,60,0.07,0.07, 0.30, "Conservative")
 
     def _preset_balanced(self):
-        self._apply_preset(35,65,0.06,0.04, 42,58,0.08,0.08, "Balanced")
+        self._apply_preset(35,65,0.06,0.04, 42,58,0.08,0.08, 0.35, "Balanced")
 
     def _preset_aggressive(self):
-        self._apply_preset(38,62,0.08,0.06, 45,55,0.10,0.10, "Aggressive")
+        self._apply_preset(38,62,0.08,0.06, 45,55,0.10,0.10, 0.50, "Aggressive")
 
-    def _apply_preset(self, nb,ns,nsl,ntp, ab,as_,asl,atp, name):
+    def _apply_preset(self, nb,ns,nsl,ntp, ab,as_,asl,atp, pool_pct, name):
+        norm_pct = int((1 - pool_pct) * 100)
+        aggr_pct = int(pool_pct * 100)
         if not messagebox.askyesno("Apply Preset",
             f"Apply {name} preset?\n\n"
+            f"Pool split: {norm_pct}% Normal / {aggr_pct}% Aggressive\n"
             f"Normal:     RSI {nb}/{ns}  SL {nsl*100:.0f}%  TP {ntp*100:.0f}%\n"
             f"Aggressive: RSI {ab}/{as_}  SL {asl*100:.0f}%  TP {atp*100:.0f}%\n\n"
             "config.py will be updated. Restart bot to apply."):
@@ -1182,6 +1190,7 @@ class Dashboard:
                 "NORMAL_STOP_LOSS":nsl, "NORMAL_TAKE_PROFIT":ntp,
                 "AGGRESSIVE_RSI_BUY":ab, "AGGRESSIVE_RSI_SELL":as_,
                 "AGGRESSIVE_STOP_LOSS":asl, "AGGRESSIVE_TAKE_PROFIT":atp,
+                "AGGRESSIVE_POOL_PCT":pool_pct,
             })
             messagebox.showinfo("Done", f"{name} preset applied.\nRestart bot to activate.")
             self._refresh()
