@@ -2229,7 +2229,34 @@ class CoinbaseExchange(BaseExchange):
 
         return f"{_b64url(hdr)}.{_b64url(body)}.{sig_b64}"
 
-    def _auth_headers(self, method, path):
+    def _is_legacy_key(self):
+        """UUID-format keys (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) are legacy HMAC keys."""
+        import re
+        key = self.credentials.get("api_key", "")
+        return bool(re.match(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            key, re.I
+        ))
+
+    def _hmac_headers(self, method, path, body=""):
+        """Legacy API key auth: CB-ACCESS-KEY + HMAC-SHA256 signature."""
+        import hmac as _hmac, hashlib
+        ts  = str(int(time.time()))
+        msg = (ts + method.upper() + path + body).encode()
+        sig = _hmac.new(
+            base64.b64decode(self.credentials["api_secret"]),
+            msg, hashlib.sha256
+        ).hexdigest()
+        return {
+            "CB-ACCESS-KEY":       self.credentials["api_key"],
+            "CB-ACCESS-SIGN":      sig,
+            "CB-ACCESS-TIMESTAMP": ts,
+            "Content-Type":        "application/json",
+        }
+
+    def _auth_headers(self, method, path, body=""):
+        if self._is_legacy_key():
+            return self._hmac_headers(method, path, body)
         return {
             "Authorization": f"Bearer {self._jwt(method, path)}",
             "Content-Type":  "application/json",
@@ -2305,7 +2332,7 @@ class CoinbaseExchange(BaseExchange):
         })
         resp = requests.post(
             f"{self.BASE}{path}", data=body,
-            headers=self._auth_headers("POST", path), timeout=10,
+            headers=self._auth_headers("POST", path, body), timeout=10,
         )
         return resp.json()
 
@@ -2322,7 +2349,7 @@ class CoinbaseExchange(BaseExchange):
         })
         resp = requests.post(
             f"{self.BASE}{path}", data=body,
-            headers=self._auth_headers("POST", path), timeout=10,
+            headers=self._auth_headers("POST", path, body), timeout=10,
         )
         return resp.json()
 
