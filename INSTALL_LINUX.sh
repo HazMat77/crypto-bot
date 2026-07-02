@@ -129,17 +129,19 @@ fi
 # this project adds in the future is picked up automatically — no need to
 # keep this script's package list in sync by hand.
 echo "  Installing bot dependencies from requirements.txt..."
+echo "  This can take a few minutes on first run — please wait, do not"
+echo "  close this window even if it looks idle for a while."
 echo ""
 
-$PYTHON_CMD -m pip install --upgrade pip --quiet
-$PYTHON_CMD -m pip install -r requirements.txt --upgrade --quiet
+$PYTHON_CMD -m pip install --upgrade pip
+$PYTHON_CMD -m pip install -r requirements.txt --upgrade
 
 # If pip refuses due to an externally-managed environment (PEP 668, common on
 # newer Debian/Ubuntu), retry with --break-system-packages or fall back to
 # a virtualenv so the install still succeeds.
 if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests; import websocket" >/dev/null 2>&1; then
     echo "  Initial install didn't take — retrying with --break-system-packages..."
-    $PYTHON_CMD -m pip install -r requirements.txt --upgrade --quiet --break-system-packages 2>/dev/null
+    $PYTHON_CMD -m pip install -r requirements.txt --upgrade --break-system-packages
 
     if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests; import websocket" >/dev/null 2>&1; then
         echo "  Still failing — creating a virtual environment instead (./venv)..."
@@ -147,8 +149,8 @@ if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests; import webso
         # shellcheck disable=SC1091
         source venv/bin/activate
         PYTHON_CMD="$(pwd)/venv/bin/python"
-        $PYTHON_CMD -m pip install --upgrade pip --quiet
-        $PYTHON_CMD -m pip install -r requirements.txt --upgrade --quiet
+        $PYTHON_CMD -m pip install --upgrade pip
+        $PYTHON_CMD -m pip install -r requirements.txt --upgrade
     fi
 fi
 echo "  (optional packages installed where available)"

@@ -276,18 +276,59 @@ def discover_mexc(min_volume: float, exclude_keywords: list) -> list:
         return []
 
 
+def discover_coinbase(min_volume: float, exclude_keywords: list) -> list:
+    """
+    Coinbase Advanced Trade's public market-data endpoint — no API key
+    needed, same as every other discover_* function here. volume_24h in
+    the response is denominated in the BASE currency (e.g. BTC amount,
+    not USD), so it's converted to a USDT-equivalent by multiplying by
+    price, matching how discover_kraken derives vol_usdt.
+    """
+    try:
+        resp = requests.get(
+            "https://api.coinbase.com/api/v3/brokerage/market/products",
+            params={"product_type": "SPOT"}, timeout=15,
+        )
+        data = resp.json().get("products", [])
+        pairs = []
+        for p in data:
+            pid = p.get("product_id", "")
+            if not pid.endswith("-USDT"):
+                continue
+            if p.get("is_disabled") or p.get("trading_disabled") or p.get("status") != "online":
+                continue
+            if should_exclude(pid, exclude_keywords):
+                continue
+            try:
+                price    = float(p.get("price", 0) or 0)
+                base_vol = float(p.get("volume_24h", 0) or 0)
+                vol_usdt = price * base_vol
+            except Exception:
+                continue
+            if vol_usdt < min_volume:
+                continue
+            pairs.append((pid, vol_usdt))
+        pairs.sort(key=lambda x: x[1], reverse=True)
+        log.info(f"[COINBASE DISCOVER] Found {len(pairs)} qualifying pairs")
+        return pairs
+    except Exception as e:
+        log.error(f"[COINBASE DISCOVER] Failed: {e}")
+        return []
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  MAIN ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 DISCOVERY_FNS = {
-    "kucoin":  discover_kucoin,
-    "binance": discover_binance,
-    "bybit":   discover_bybit,
-    "kraken":  discover_kraken,
-    "okx":     discover_okx,
-    "gateio":  discover_gateio,
-    "mexc":    discover_mexc,
+    "kucoin":   discover_kucoin,
+    "binance":  discover_binance,
+    "bybit":    discover_bybit,
+    "kraken":   discover_kraken,
+    "okx":      discover_okx,
+    "gateio":   discover_gateio,
+    "mexc":     discover_mexc,
+    "coinbase": discover_coinbase,
 }
 
 

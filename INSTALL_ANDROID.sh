@@ -53,8 +53,9 @@ cd "$BOT_DIR" || { echo "  ERROR: could not enter $BOT_DIR"; exit 1; }
 
 # ── Step 3: Python dependencies (core + web GUI, no desktop-only extras) ───
 echo ""
-echo "  Step 3/5: Installing dependencies (this can take a few minutes)..."
-pip install --upgrade pip --quiet
+echo "  Step 3/5: Installing dependencies (this can take a few minutes) — please"
+echo "  wait, do not close Termux even if it looks idle for a while."
+pip install --upgrade pip
 # Everything in requirements.txt except customtkinter (desktop-GUI-only —
 # CustomTkinter needs a real display server tkinter doesn't have on
 # Termux, so Android uses the browser-based dashboard.py instead).
