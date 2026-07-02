@@ -2310,6 +2310,8 @@ class CoinbaseExchange(BaseExchange):
             headers=self._auth_headers("GET", path),
             timeout=10,
         )
+        if not resp.ok or not resp.text.strip():
+            raise ValueError(f"Coinbase candles HTTP {resp.status_code}: {resp.text[:200]}")
         candles = resp.json().get("candles", [])
         if not candles:
             raise ValueError(f"Coinbase: no candles for {symbol}")
