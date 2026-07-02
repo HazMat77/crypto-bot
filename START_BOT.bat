@@ -47,7 +47,20 @@ if errorlevel 1 (
     echo.
 )
 
-:: ── Mode selection menu ───────────────────────────────────────────────────────
+:: ── Default: straight to the GUI ────────────────────────────────────────────
+:: Double-clicking this file, or the desktop shortcut, launches the GUI
+:: directly — no menu. Pick Paper or Live mode, enter exchange API keys,
+:: turn AI on/off, and Start/Pause/Resume the bot, all from there. You can
+:: still edit config.py / bot_secrets.py by hand at any point, before or
+:: after launching, if you prefer.
+::
+:: The old console menu (direct paper/live CLI, web dashboard, backtest)
+:: is still available — just not the default:
+::   START_BOT.bat cli
+if /i "%~1"=="cli" goto MENU
+goto GUI
+
+:: ── Mode selection menu (console) ───────────────────────────────────────────
 :MENU
 echo  Which mode would you like to run?
 echo.
@@ -75,7 +88,10 @@ goto MENU
 color 0B
 echo.
 echo  Opening GUI Dashboard...
-echo  (Close the window to return here)
+echo  Pick Paper or Live mode, enter exchange API keys, and turn AI on/off
+echo  from the Config tab, then click Start.
+echo  (Close the window to exit. Prefer the command line? Run:
+echo   START_BOT.bat cli)
 echo.
 cd /d "%~dp0"
 "%PYTHON_CMD%" gui_dashboard.py
