@@ -275,6 +275,40 @@ with col_resume:
         Path(".bot_pause").unlink(missing_ok=True)
         st.sidebar.success("Resumed.")
 
+# ── Updates — reuses auto_updater.py, the same module bot.py's own
+# background checker and the desktop GUI's Updates button use. Works
+# identically on Android (Termux ships git).
+st.sidebar.divider()
+if st.sidebar.button("⬆️ Check for Updates", use_container_width=True):
+    try:
+        import auto_updater
+        import config as _cfg_mod
+        result = auto_updater.check_for_update(_cfg_mod)
+    except Exception as e:
+        result = {"update_available": False, "reason": f"Update check failed: {e}"}
+
+    if result.get("update_available"):
+        local  = (result.get("local_commit")  or "?")[:8]
+        remote = (result.get("remote_commit") or "?")[:8]
+        st.sidebar.warning(f"Update available: {local} → {remote}")
+        st.sidebar.caption("bot_secrets.py is gitignored — an update never touches it, "
+                           "nothing to re-enter afterward.")
+        if st.sidebar.button("⬆️ Pull Update Now", use_container_width=True):
+            try:
+                import config as _cfg_mod2
+                ok = auto_updater.perform_update(_cfg_mod2)
+            except Exception as e:
+                ok, err = False, str(e)
+            else:
+                err = None
+            if ok:
+                st.sidebar.success("Updated. Restart the bot and this dashboard to run the new version.")
+            else:
+                st.sidebar.error(err or "Update failed — see logs/watchdog.log for details.")
+    else:
+        reason = result.get("reason") or ""
+        st.sidebar.info("Up to date." if reason in ("", "Already up to date") else reason)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  OVERVIEW PAGE
