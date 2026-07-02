@@ -2207,9 +2207,15 @@ class CoinbaseExchange(BaseExchange):
         else:
             # Raw base64 private key (Coinbase newer CDP JSON format)
             raw = base64.b64decode(secret if isinstance(secret, str) else secret)
-            private_key = ec.derive_private_key(
-                int.from_bytes(raw[:32], "big"), ec.SECP256R1(), default_backend()
-            )
+            # Try DER first, then fall back to raw scalar (first 32 bytes)
+            try:
+                private_key = serialization.load_der_private_key(
+                    raw, password=None, backend=default_backend()
+                )
+            except Exception:
+                private_key = ec.derive_private_key(
+                    int.from_bytes(raw[:32], "big"), ec.SECP256R1(), default_backend()
+                )
 
         import os as _os
         now  = int(time.time())
