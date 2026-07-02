@@ -2183,43 +2183,33 @@ class CoinbaseExchange(BaseExchange):
         return symbol   # Coinbase uses BTC-USDT natively
 
     def _jwt(self, method, path):
-        """Build a per-request JWT for Coinbase Advanced Trade API auth."""
+        """Build a per-request JWT for Coinbase Advanced Trade API auth (Ed25519/EdDSA)."""
         try:
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import ec
-            from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-            from cryptography.hazmat.backends import default_backend
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         except ImportError:
             raise ImportError(
                 "Coinbase adapter requires the 'cryptography' package. "
                 "Run: pip install cryptography"
             )
-        import json as _json
+        import json as _json, os as _os
 
         key_name = self.credentials["api_key"]
         secret   = self.credentials["api_secret"]
 
+        # Coinbase CDP keys are Ed25519. The JSON privateKey field is base64-encoded:
+        # either 32-byte seed or 64-byte (seed + public key) — use first 32 bytes.
         if isinstance(secret, str) and secret.strip().startswith("-----"):
-            # Full PEM block
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.backends import default_backend
             private_key = serialization.load_pem_private_key(
                 secret.encode(), password=None, backend=default_backend()
             )
         else:
-            # Raw base64 private key (Coinbase newer CDP JSON format)
-            raw = base64.b64decode(secret if isinstance(secret, str) else secret)
-            # Try DER first, then fall back to raw scalar (first 32 bytes)
-            try:
-                private_key = serialization.load_der_private_key(
-                    raw, password=None, backend=default_backend()
-                )
-            except Exception:
-                private_key = ec.derive_private_key(
-                    int.from_bytes(raw[:32], "big"), ec.SECP256R1(), default_backend()
-                )
+            raw = base64.b64decode(secret)
+            private_key = Ed25519PrivateKey.from_private_bytes(raw[:32])
 
-        import os as _os
         now  = int(time.time())
-        hdr  = {"alg": "ES256", "kid": key_name}
+        hdr  = {"alg": "EdDSA", "kid": key_name}
         body = {
             "sub": key_name,
             "iss": "coinbase-cloud",
@@ -2236,10 +2226,8 @@ class CoinbaseExchange(BaseExchange):
             ).rstrip(b"=").decode()
 
         signing_input = f"{_b64url(hdr)}.{_b64url(body)}".encode()
-        der_sig = private_key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
-        r, s    = decode_dss_signature(der_sig)
-        raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
-        sig_b64 = base64.urlsafe_b64encode(raw_sig).rstrip(b"=").decode()
+        sig = private_key.sign(signing_input)
+        sig_b64 = base64.urlsafe_b64encode(sig).rstrip(b"=").decode()
 
         return f"{_b64url(hdr)}.{_b64url(body)}.{sig_b64}"
 
