@@ -742,15 +742,18 @@ elif page == "⚙️ Config":
             "Conservative": dict(NORMAL_RSI_BUY=35, NORMAL_RSI_SELL=65,
                                  NORMAL_STOP_LOSS=0.05, NORMAL_TAKE_PROFIT=0.05,
                                  AGGRESSIVE_RSI_BUY=40, AGGRESSIVE_RSI_SELL=60,
-                                 AGGRESSIVE_STOP_LOSS=0.07, AGGRESSIVE_TAKE_PROFIT=0.07),
+                                 AGGRESSIVE_STOP_LOSS=0.07, AGGRESSIVE_TAKE_PROFIT=0.07,
+                                 AGGRESSIVE_POOL_PCT=0.30),
             "Balanced": dict(NORMAL_RSI_BUY=35, NORMAL_RSI_SELL=65,
                              NORMAL_STOP_LOSS=0.06, NORMAL_TAKE_PROFIT=0.04,
                              AGGRESSIVE_RSI_BUY=42, AGGRESSIVE_RSI_SELL=58,
-                             AGGRESSIVE_STOP_LOSS=0.08, AGGRESSIVE_TAKE_PROFIT=0.08),
+                             AGGRESSIVE_STOP_LOSS=0.08, AGGRESSIVE_TAKE_PROFIT=0.08,
+                             AGGRESSIVE_POOL_PCT=0.35),
             "Aggressive": dict(NORMAL_RSI_BUY=38, NORMAL_RSI_SELL=62,
                                NORMAL_STOP_LOSS=0.08, NORMAL_TAKE_PROFIT=0.06,
                                AGGRESSIVE_RSI_BUY=45, AGGRESSIVE_RSI_SELL=55,
-                               AGGRESSIVE_STOP_LOSS=0.10, AGGRESSIVE_TAKE_PROFIT=0.10),
+                               AGGRESSIVE_STOP_LOSS=0.10, AGGRESSIVE_TAKE_PROFIT=0.10,
+                               AGGRESSIVE_POOL_PCT=0.50),
         }
         col_a, col_b, col_c = st.columns(3)
         for col, name in zip((col_a, col_b, col_c), PRESETS):

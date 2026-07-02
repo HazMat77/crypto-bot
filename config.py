@@ -101,8 +101,8 @@ RSI_PERIOD = 14
 # PAPER TESTING:  RSI_BUY = 45, RSI_SELL = 55  (more signals to test with)
 # LIVE TRADING:   RSI_BUY = 35, RSI_SELL = 65  (conservative, less false signals)
 # Currently set for LIVE — change back to 45/55 if you want more paper test signals
-RSI_BUY    = 45
-RSI_SELL   = 55
+RSI_BUY    = 37
+RSI_SELL   = 65
 
 # ── Moving Average ─────────────────────────────────────────────────────────
 MA_PERIOD = 20
@@ -293,7 +293,7 @@ EXCHANGES = {
     },
 
     "coinbase": {
-        "enabled":    False,
+        "enabled":    True,
         "api_key":    _coinbase_key,    # API key name from coinbase.com/settings/api
         "api_secret": _coinbase_secret, # EC private key (full PEM block)
         # To get credentials:
@@ -373,7 +373,7 @@ MULTI_TIMEFRAME_REQUIRED             = False  # True = hard veto on conflict, no
 # ── Also supports Grok (xAI) as an alternative AI provider ────────────────
 # Set AI_PROVIDER = "grok" and fill in GROK_API_KEY to use Grok instead.
 # See README_WINDOWS.txt for how to get a Grok API key.
-AI_PROVIDER   = "claude"   # "claude" | "grok"
+AI_PROVIDER   = 'claude'   # "claude" | "grok"
 GROK_API_KEY  = _secrets.GROK_API_KEY
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -551,7 +551,7 @@ WATCHDOG_ENABLED               = True
 WATCHDOG_CHECK_INTERVAL_SECS   = 60    # how often the watchdog checks liveness
 LIVENESS_STALE_MINUTES         = 5     # bot considered frozen if no ping in this long
                                         # (bot pings every 2 min, so 5 min = ~2 missed pings)
-WATCHDOG_AUTO_RESTART          = False # if True, watchdog relaunches bot.py on failure
+WATCHDOG_AUTO_RESTART          = True # if True, watchdog relaunches bot.py on failure
                                         # OFF by default — restarting a broken bot
                                         # automatically can mask a real problem;
                                         # turn on only once you trust the failure mode
@@ -643,24 +643,24 @@ AUTO_APPLY_REQUIRE_APPROVAL_PCT  = 0.15   # >=15% relative change always asks fi
 DUAL_POOL_ENABLED      = False   # OFF by default — 100% safe mode, no split.
                                   # /aggressive sets this True (and the 50/50 ratio).
                                   # /safe sets this back to False.
-AGGRESSIVE_POOL_PCT    = 0.0    # Only used when DUAL_POOL_ENABLED=True — 50/50 split
+AGGRESSIVE_POOL_PCT    = 0.3    # Only used when DUAL_POOL_ENABLED=True — default 70/30 split
 
 # Safe pool settings — these are the ACTIVE settings whenever
 # DUAL_POOL_ENABLED is False (the default), and also the "safe half"
 # whenever /aggressive is active.
-NORMAL_RSI_BUY         = 45
-NORMAL_RSI_SELL        = 55
-NORMAL_STOP_LOSS       = 0.04    # 4% — measured from peak, see risk_manager.py
-NORMAL_TAKE_PROFIT     = 0.1    # 25% — from entry
+NORMAL_RSI_BUY         = 37
+NORMAL_RSI_SELL        = 65
+NORMAL_STOP_LOSS       = 0.08    # 4% — measured from peak, see risk_manager.py
+NORMAL_TAKE_PROFIT     = 0.2    # 25% — from entry
 NORMAL_TRAILING_STOP   = 0.03    # 3%
 NORMAL_MAX_HOLD_HOURS  = 168
 
 # Aggressive pool settings — only active for the "aggressive half"
 # of coins after /aggressive has been sent.
-AGGRESSIVE_RSI_BUY     = 42     # fires more often (wider band)
-AGGRESSIVE_RSI_SELL    = 58     # exits sooner on overbought
-AGGRESSIVE_STOP_LOSS   = 0.10   # 10% — matches global ceiling
-AGGRESSIVE_TAKE_PROFIT = 0.25   # 25% — matches global target
+AGGRESSIVE_RSI_BUY     = 45     # fires more often (wider band)
+AGGRESSIVE_RSI_SELL    = 55     # exits sooner on overbought
+AGGRESSIVE_STOP_LOSS   = 0.1   # 10% — matches global ceiling
+AGGRESSIVE_TAKE_PROFIT = 0.1   # 25% — matches global target
 AGGRESSIVE_TRAILING_STOP = 0.04 # 4% trailing
 AGGRESSIVE_MAX_HOLD_HOURS = 24  # shorter hold — take profits faster
 
@@ -743,3 +743,11 @@ STAKING_SUPPORTED_EXCHANGES = {"binance", "bybit", "okx", "kucoin", "gateio", "k
 
 
 # Auto-adapted to SIDEWAYS regime (2026-07-02 06:00)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 15:15)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 15:24)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 15:56)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 16:14)

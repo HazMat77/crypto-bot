@@ -876,7 +876,7 @@ class TelegramCommandHandler:
         try:
             updates = {
                 "DUAL_POOL_ENABLED":    True,
-                "AGGRESSIVE_POOL_PCT":  0.50,   # 50/50 split
+                "AGGRESSIVE_POOL_PCT":  0.50,   # /aggressive = 50/50 split
                 # Safe half keeps its own settings — untouched, still 18%/4%
                 "NORMAL_RSI_BUY":       35,
                 "NORMAL_RSI_SELL":      65,
