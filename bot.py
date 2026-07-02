@@ -1283,17 +1283,25 @@ def heartbeat_worker(mode, stop_event):
             open_pos = {}
             tiers    = {}
             for ex in EXCHANGES:
-                tier = get_current_tier(ex)
+                # get_current_tier() returns a direct reference into the
+                # shared config.SCALING_TIERS list — exchanges on the same
+                # tier (e.g. all three on "Starter") get back the SAME dict
+                # object. Copy it before mutating, otherwise writing
+                # "coins" here overwrites it for every exchange sharing
+                # that tier, and the last exchange processed wins for all
+                # of them (this was the cause of every exchange showing
+                # the same coin count in the heartbeat).
+                tier = dict(get_current_tier(ex))
                 with active_coins_lock:
-                    # BUG FIX: get_current_tier() only returns the tier's
-                    # CEILING (max_coins) — it has no concept of how many
-                    # coins are actually being watched right now. Reading
-                    # the real, live active_coins length here (same source
-                    # /heartbeat already uses correctly) is what actually
-                    # fixes the discrepancy users would otherwise see
-                    # between the on-demand and scheduled heartbeat: e.g.
-                    # Kraken showing "15 coins" (the ceiling) when only 11
-                    # qualifying pairs actually exist right now.
+                    # get_current_tier() only returns the tier's CEILING
+                    # (max_coins) — it has no concept of how many coins are
+                    # actually being watched right now. Reading the real,
+                    # live active_coins length here (same source /heartbeat
+                    # already uses correctly) is what actually fixes the
+                    # discrepancy users would otherwise see between the
+                    # on-demand and scheduled heartbeat: e.g. Kraken showing
+                    # "15 coins" (the ceiling) when only 11 qualifying pairs
+                    # actually exist right now.
                     tier["coins"] = len(active_coins.get(ex, []))
                 tiers[ex] = tier
             for ex_name, exchange in EXCHANGES.items():
