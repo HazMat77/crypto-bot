@@ -766,13 +766,37 @@ elif page == "⚙️ Config":
         pool = st.number_input("Paper Starting Pool (USDT)", min_value=1.0,
                                value=float(cfg.get("PAPER_STARTING_USDT", 100.0)), step=10.0)
 
+        # AI provider + keys — paper trading uses the free fake-AI simulator
+        # regardless of this; a real key only matters once AI is on and live.
+        try:
+            import config as _ai_cfg_mod
+            cur_provider   = getattr(_ai_cfg_mod, "AI_PROVIDER", "claude")
+            cur_claude_key = str(getattr(_ai_cfg_mod, "AI_API_KEY", "") or "")
+            cur_grok_key   = str(getattr(_ai_cfg_mod, "GROK_API_KEY", "") or "")
+        except Exception:
+            cur_provider, cur_claude_key, cur_grok_key = "claude", "", ""
+
+        col_prov, col_claude, col_grok = st.columns([1, 2, 2])
+        with col_prov:
+            provider = st.selectbox("AI Provider", ["Claude", "Grok"],
+                                    index=(1 if cur_provider == "grok" else 0))
+        with col_claude:
+            claude_key = st.text_input("Claude API Key", value=cur_claude_key)
+        with col_grok:
+            grok_key = st.text_input("Grok API Key", value=cur_grok_key)
+
         if st.button("💾 Save Bot Settings"):
             settings_writer.write_config_values({
                 "AI_ENABLED":            ai_on,
+                "AI_PROVIDER":           repr("grok" if provider == "Grok" else "claude"),
                 "PAPER_TRADING":         not live_default,
                 "TELEGRAM_ENABLED":      tg_on,
                 "WATCHDOG_AUTO_RESTART": wd_on,
                 "PAPER_STARTING_USDT":   pool,
+            })
+            settings_writer.write_bot_secrets({
+                "AI_API_KEY":   claude_key.strip(),
+                "GROK_API_KEY": grok_key.strip(),
             })
             st.cache_data.clear()
             st.success("Bot settings saved. Restart the bot to apply.")

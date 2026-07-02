@@ -590,12 +590,43 @@ class Dashboard:
                                             text_color=C["text"], font=FONT_MONO)
         self.paper_pool_entry.pack(side="left", padx=(0,20))
 
-        PillButton(bs_row2, "💾  Save Settings", self._save_bot_settings, C["green"]).pack(side="left")
+        # AI provider + keys — paper trading uses the free fake-AI simulator
+        # regardless of this; a real key is only needed once AI_ENABLED is
+        # on AND the bot is trading live.
+        tk.Label(bs_row2, text="AI Provider:", bg=C["surface"], fg=C["muted"],
+                font=FONT_UI).pack(side="left", padx=(0,8))
+        self.ai_provider_var = tk.StringVar(value="claude")
+        ctk.CTkComboBox(bs_row2, values=["Claude", "Grok"], variable=self.ai_provider_var,
+                       width=110, height=28, corner_radius=6, fg_color=C["bg"],
+                       border_color=C["border"], button_color=C["border"],
+                       button_hover_color=C["hover"], dropdown_fg_color=C["surface"],
+                       font=FONT_UI).pack(side="left")
+
+        bs_row3 = tk.Frame(bs_card, bg=C["surface"])
+        bs_row3.pack(fill="x", padx=12, pady=(4,4))
+        tk.Label(bs_row3, text="Claude API Key:", bg=C["surface"], fg=C["muted"], width=16,
+                anchor="w", font=FONT_UI).pack(side="left")
+        self.claude_key_entry = ctk.CTkEntry(bs_row3, height=28, corner_radius=6,
+                                            fg_color=C["bg"], border_color=C["border"],
+                                            text_color=C["text"], font=FONT_MONO)
+        self.claude_key_entry.pack(side="left", fill="x", expand=True, padx=(0,20))
+        tk.Label(bs_row3, text="Grok API Key:", bg=C["surface"], fg=C["muted"], width=13,
+                anchor="w", font=FONT_UI).pack(side="left")
+        self.grok_key_entry = ctk.CTkEntry(bs_row3, height=28, corner_radius=6,
+                                          fg_color=C["bg"], border_color=C["border"],
+                                          text_color=C["text"], font=FONT_MONO)
+        self.grok_key_entry.pack(side="left", fill="x", expand=True)
+
+        bs_row4 = tk.Frame(bs_card, bg=C["surface"])
+        bs_row4.pack(fill="x", padx=12, pady=(8,4))
+        PillButton(bs_row4, "💾  Save Settings", self._save_bot_settings, C["green"]).pack(side="left")
 
         tk.Label(bs_card,
                 text="\"Default mode\" only applies when the bot is launched without an explicit "
                     "mode — the Start button's own Paper/Live prompt always takes priority over it. "
-                    "Restart the bot to apply any of these.",
+                    "AI keys are gitignored (bot_secrets.py) like exchange keys. Paper trading uses "
+                    "a free simulated AI regardless of these — a real key only matters once AI is "
+                    "on and you're live. Restart the bot to apply any of these.",
                 bg=C["surface"], fg=C["muted"], wraplength=1150, justify="left",
                 font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
                 ).pack(anchor="w", padx=12, pady=(0,10))
@@ -1153,6 +1184,13 @@ class Dashboard:
             self.default_mode_var.set(not bool(getattr(cfg, "PAPER_TRADING", True)))
             self.paper_pool_entry.delete(0, "end")
             self.paper_pool_entry.insert(0, str(getattr(cfg, "PAPER_STARTING_USDT", 100.0)))
+
+            provider = getattr(cfg, "AI_PROVIDER", "claude")
+            self.ai_provider_var.set("Grok" if provider == "grok" else "Claude")
+            self.claude_key_entry.delete(0, "end")
+            self.claude_key_entry.insert(0, str(getattr(cfg, "AI_API_KEY", "") or ""))
+            self.grok_key_entry.delete(0, "end")
+            self.grok_key_entry.insert(0, str(getattr(cfg, "GROK_API_KEY", "") or ""))
         except Exception:
             pass
 
@@ -1169,12 +1207,18 @@ class Dashboard:
                 "Save these bot settings to config.py?\nRestart the bot to apply."):
             return
         try:
+            provider = "grok" if self.ai_provider_var.get() == "Grok" else "claude"
             settings_writer.write_config_values({
                 "AI_ENABLED":              self.ai_enabled_var.get(),
+                "AI_PROVIDER":             repr(provider),
                 "PAPER_TRADING":           not self.default_mode_var.get(),
                 "TELEGRAM_ENABLED":        self.telegram_enabled_var.get(),
                 "WATCHDOG_AUTO_RESTART":   self.watchdog_restart_var.get(),
                 "PAPER_STARTING_USDT":     pool,
+            })
+            settings_writer.write_bot_secrets({
+                "AI_API_KEY":   self.claude_key_entry.get().strip(),
+                "GROK_API_KEY": self.grok_key_entry.get().strip(),
             })
             messagebox.showinfo("Saved", "Bot settings saved.\nRestart the bot to apply.")
             self._refresh()

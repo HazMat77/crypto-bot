@@ -31,7 +31,11 @@
      API Secret
      Passphrase (the one you set in step 6)
 
-9. Open config.py in Notepad and fill in:
+9. Easiest: start the bot (see RUNNING THE BOT below), open the
+   Config tab, pick KuCoin, paste in the three values, and click
+   Save — no file editing needed.
+
+   Or by hand: open config.py in Notepad and fill in:
      "api_key":    "paste your API key here"
      "api_secret": "paste your secret here"
      "passphrase": "paste your passphrase here"
@@ -70,16 +74,18 @@ Keys with Trade-only permission CANNOT withdraw funds — keep it that way.
   NOTE: Paper trading uses FREE fake AI — no API key needed.
   Only get a real AI key when you switch to live trading.
 
+  Once you have a key (either provider, see below): start the bot,
+  open the Config tab -> Bot Settings, pick the provider from the
+  dropdown, paste the key into the matching field, and click Save —
+  no file editing needed. Or set AI_ENABLED/AI_PROVIDER in config.py
+  and AI_API_KEY/GROK_API_KEY in bot_secrets.py by hand instead.
+
   ── OPTION A: Claude (Anthropic) ──────────────────────
 
   1. Go to console.anthropic.com
   2. Sign up for an account
   3. Click "API Keys" → "Create Key"
   4. Copy the key
-  5. In config.py:
-       AI_ENABLED   = True
-       AI_PROVIDER  = "claude"
-       AI_API_KEY   = "paste your key here"
 
   Cost: ~$5 free credit on signup, then ~$0.10-0.30/day
   Best for: nuanced market reasoning, news analysis
@@ -90,10 +96,6 @@ Keys with Trade-only permission CANNOT withdraw funds — keep it that way.
   2. Sign up / log in with X (Twitter) account
   3. Click "API Keys" → create a key
   4. Copy the key
-  5. In config.py:
-       AI_ENABLED   = True
-       AI_PROVIDER  = "grok"
-       GROK_API_KEY = "paste your key here"
 
   Cost: Free tier available, paid plans from $25/month
   Best for: fast responses, real-time awareness
@@ -114,22 +116,39 @@ Keys with Trade-only permission CANNOT withdraw funds — keep it that way.
   GATE.IO:  gate.io → Account → API Keys
   MEXC:     mexc.com → Account → API Management
 
-  Then in config.py find the exchange, set "enabled": True
-  and paste your key and secret.
+  Then either use the GUI's Config tab -> Exchange API Keys (pick the
+  exchange, paste in the key/secret, check Enabled, Save), or in
+  config.py find the exchange, set "enabled": True and paste your key
+  and secret by hand.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   RUNNING THE BOT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Double-click START_BOT.bat
-  Choose:  [1] Paper trading  ← always start here
-           [2] Live trading   ← only after testing
-           [3] Exit
+  Double-click START_BOT.bat (or the desktop shortcut, if you created
+  one in INSTALL.bat) — this opens the GUI dashboard directly. From
+  there, no Notepad required:
 
-  The bot window shows live activity.
-  Logs are saved in the logs/ folder.
-  Press CTRL+C to stop.
+    - Config tab -> Exchange API Keys: pick an exchange, paste in your
+      key/secret/passphrase, Save
+    - Config tab -> Bot Settings: AI on/off + provider + API key,
+      Telegram on/off, Watchdog auto-restart, paper starting pool size
+    - Top bar -> Start: choose Paper (always start here) or Live (only
+      after testing), confirm, and it launches the bot AND the
+      watchdog together
+    - Top bar -> Pause / Resume at any time
+    - Top bar -> Updates: checks GitHub for a newer version and pulls
+      it on request — your API keys are never touched by an update
+
+  You can still edit config.py / bot_secrets.py by hand in Notepad
+  instead, any time, if you prefer — nothing about the GUI requires it
+  or gets in the way of it.
+
+  Prefer the old console menu (direct paper/live, web dashboard,
+  backtest)? Run:  START_BOT.bat cli
+
+  Logs are saved in the logs/ folder either way.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -137,8 +156,10 @@ Keys with Trade-only permission CANNOT withdraw funds — keep it that way.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   INSTALL.bat        One-time setup (run first)
-  START_BOT.bat      Launch the bot (double-click each time)
-  config.py          All settings — edit with Notepad
+  START_BOT.bat      Opens the GUI (double-click each time). "START_BOT.bat
+                     cli" for the old console menu instead.
+  config.py          All settings — editable via the GUI's Config tab,
+                     or by hand with Notepad
   bot.py             Main bot engine
   exchanges.py       Exchange connectors
   ai_analyst.py      Claude/Grok AI integration
