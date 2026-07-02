@@ -2197,13 +2197,19 @@ class CoinbaseExchange(BaseExchange):
         import json as _json
 
         key_name = self.credentials["api_key"]
-        pem      = self.credentials["api_secret"]
-        if isinstance(pem, str):
-            pem = pem.encode()
+        secret   = self.credentials["api_secret"]
 
-        private_key = serialization.load_pem_private_key(
-            pem, password=None, backend=default_backend()
-        )
+        if isinstance(secret, str) and secret.strip().startswith("-----"):
+            # Full PEM block
+            private_key = serialization.load_pem_private_key(
+                secret.encode(), password=None, backend=default_backend()
+            )
+        else:
+            # Raw base64 private key (Coinbase newer CDP JSON format)
+            raw = base64.b64decode(secret if isinstance(secret, str) else secret)
+            private_key = ec.derive_private_key(
+                int.from_bytes(raw[:32], "big"), ec.SECP256R1(), default_backend()
+            )
 
         now  = int(time.time())
         hdr  = {"alg": "ES256", "kid": key_name}
