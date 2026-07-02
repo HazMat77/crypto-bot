@@ -20,59 +20,8 @@ bootstrap.ensure_installed(gui=True)
 
 import customtkinter as ctk
 
-# ── Exchange credential fields ────────────────────────────────────────────
-# (config.py EXCHANGES-dict field, bot_secrets.py variable name, GUI label)
-EXCHANGE_DISPLAY = {
-    "kucoin": "KuCoin", "binance": "Binance", "kraken": "Kraken", "bybit": "Bybit",
-    "okx": "OKX", "gateio": "Gate.io", "mexc": "MEXC", "webull": "Webull",
-    "virgocx": "VirgoCX", "coinbase": "Coinbase",
-}
-EXCHANGE_FIELDS = {
-    "kucoin": [
-        ("api_key", "KUCOIN_API_KEY", "API Key"),
-        ("api_secret", "KUCOIN_API_SECRET", "API Secret"),
-        ("passphrase", "KUCOIN_PASSPHRASE", "Passphrase"),
-    ],
-    "binance": [
-        ("api_key", "BINANCE_API_KEY", "API Key"),
-        ("api_secret", "BINANCE_API_SECRET", "API Secret"),
-    ],
-    "kraken": [
-        ("api_key", "KRAKEN_API_KEY", "API Key"),
-        ("api_secret", "KRAKEN_API_SECRET", "API Secret"),
-        ("futures_api_key", "KRAKEN_FUTURES_API_KEY", "Futures API Key (optional)"),
-        ("futures_api_secret", "KRAKEN_FUTURES_API_SECRET", "Futures API Secret (optional)"),
-    ],
-    "bybit": [
-        ("api_key", "BYBIT_API_KEY", "API Key"),
-        ("api_secret", "BYBIT_API_SECRET", "API Secret"),
-    ],
-    "okx": [
-        ("api_key", "OKX_API_KEY", "API Key"),
-        ("api_secret", "OKX_API_SECRET", "API Secret"),
-        ("passphrase", "OKX_PASSPHRASE", "Passphrase"),
-    ],
-    "gateio": [
-        ("api_key", "GATEIO_API_KEY", "API Key"),
-        ("api_secret", "GATEIO_API_SECRET", "API Secret"),
-    ],
-    "mexc": [
-        ("api_key", "MEXC_API_KEY", "API Key"),
-        ("api_secret", "MEXC_API_SECRET", "API Secret"),
-    ],
-    "webull": [
-        ("api_key", "WEBULL_API_KEY", "App Key"),
-        ("api_secret", "WEBULL_API_SECRET", "App Secret"),
-    ],
-    "virgocx": [
-        ("api_key", "VIRGOCX_API_KEY", "API Key"),
-        ("api_secret", "VIRGOCX_API_SECRET", "API Secret"),
-    ],
-    "coinbase": [
-        ("api_key", "COINBASE_API_KEY", "API Key Name"),
-        ("api_secret", "COINBASE_API_SECRET", "EC Private Key (PEM)"),
-    ],
-}
+import settings_writer
+from settings_writer import EXCHANGE_DISPLAY, EXCHANGE_FIELDS
 
 # ── Palette ────────────────────────────────────────────────────────────────
 C = {
@@ -1164,7 +1113,7 @@ class Dashboard:
             "config.py will be updated. Restart bot to apply."):
             return
         try:
-            self._write_config_values({
+            settings_writer.write_config_values({
                 "NORMAL_RSI_BUY":nb, "NORMAL_RSI_SELL":ns,
                 "NORMAL_STOP_LOSS":nsl, "NORMAL_TAKE_PROFIT":ntp,
                 "AGGRESSIVE_RSI_BUY":ab, "AGGRESSIVE_RSI_SELL":as_,
@@ -1174,21 +1123,6 @@ class Dashboard:
             self._refresh()
         except Exception as e:
             messagebox.showerror("Error", str(e))
-
-    def _write_config_values(self, updates: dict):
-        """Shared regex-based line replacement for simple `KEY = value`
-        assignments in config.py — used by presets and Bot Settings alike.
-        Only touches the exact keys given; everything else in the file,
-        including comments and the EXCHANGES dict, is left untouched."""
-        with open("config.py", "r", encoding="utf-8") as f:
-            content = f.read()
-        for key, val in updates.items():
-            content = re.sub(
-                rf"^({re.escape(key)}\s*=\s*)(.+?)(\s*(?:#.*)?)$",
-                rf"\g<1>{val}\g<3>",
-                content, flags=re.MULTILINE)
-        with open("config.py", "w", encoding="utf-8") as f:
-            f.write(content)
 
     def _load_bot_settings(self):
         try:
@@ -1216,7 +1150,7 @@ class Dashboard:
                 "Save these bot settings to config.py?\nRestart the bot to apply."):
             return
         try:
-            self._write_config_values({
+            settings_writer.write_config_values({
                 "AI_ENABLED":              self.ai_enabled_var.get(),
                 "PAPER_TRADING":           not self.default_mode_var.get(),
                 "TELEGRAM_ENABLED":        self.telegram_enabled_var.get(),
@@ -1283,51 +1217,14 @@ class Dashboard:
             return
 
         try:
-            self._write_bot_secrets(values)
-            self._write_exchange_enabled(exchange_key, enabled)
+            settings_writer.write_bot_secrets(values)
+            settings_writer.write_exchange_enabled(exchange_key, enabled)
             messagebox.showinfo("Saved",
                 f"{EXCHANGE_DISPLAY[exchange_key]} credentials saved.\n"
                 "Restart the bot (or click Start) to apply.")
             self._refresh()
         except Exception as e:
             messagebox.showerror("Error", f"Could not save credentials:\n{e}")
-
-    def _write_bot_secrets(self, values: dict):
-        """Writes API key/secret values into bot_secrets.py, creating it
-        from bot_secrets.example.py first if it doesn't exist yet (it's
-        gitignored, so a fresh clone never has one). repr() is used for
-        the replacement value rather than manual quoting so any embedded
-        quotes/backslashes/newlines round-trip safely as valid Python."""
-        secrets_path = Path("bot_secrets.py")
-        if secrets_path.exists():
-            content = secrets_path.read_text(encoding="utf-8")
-        else:
-            content = Path("bot_secrets.example.py").read_text(encoding="utf-8")
-
-        for var_name, value in values.items():
-            pattern = re.compile(r"^" + re.escape(var_name) + r"\s*=.*$", re.MULTILINE)
-            replacement = f"{var_name} = {value!r}"
-            if pattern.search(content):
-                content = pattern.sub(replacement, content, count=1)
-            else:
-                content += f"\n{replacement}\n"
-
-        secrets_path.write_text(content, encoding="utf-8")
-
-    def _write_exchange_enabled(self, exchange_key, enabled: bool):
-        """Flips the "enabled" flag inside that exchange's block in
-        config.py's EXCHANGES dict. Scoped to just that block (matches
-        the opening `"exchange_key": {` line, then the "enabled" line
-        right after it) so it can't accidentally touch another
-        exchange's flag."""
-        config_path = Path("config.py")
-        content = config_path.read_text(encoding="utf-8")
-        pattern = re.compile(
-            r'("' + re.escape(exchange_key) + r'"\s*:\s*\{\s*\n\s*"enabled"\s*:\s*)(True|False)')
-        new_content, n = pattern.subn(lambda m: m.group(1) + str(enabled), content, count=1)
-        if n == 0:
-            raise ValueError(f"Could not find '{exchange_key}' in config.py's EXCHANGES dict")
-        config_path.write_text(new_content, encoding="utf-8")
 
     # ══════════════════════════════════════════════════════════════════════
     #  UPDATES  (reuses auto_updater.py — the same module bot.py's own
