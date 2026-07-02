@@ -24,16 +24,20 @@ import settings_writer
 from settings_writer import EXCHANGE_DISPLAY, EXCHANGE_FIELDS
 
 # ── Palette ────────────────────────────────────────────────────────────────
+# AMD Adrenaline-style palette — near-black background, AMD red as the
+# primary accent (active tab, primary buttons, highlights). This exact
+# palette is mirrored in dashboard.py's .streamlit theme + CSS so the
+# desktop GUI and the web/Android GUI look like the same application.
 C = {
-    "bg":       "#0d1117",
-    "surface":  "#161b22",
-    "border":   "#21262d",
-    "hover":    "#1f2937",
-    "text":     "#e6edf3",
-    "muted":    "#8b949e",
+    "bg":       "#0a0a0a",
+    "surface":  "#171717",
+    "border":   "#2b2b2b",
+    "hover":    "#271616",
+    "text":     "#f2f2f2",
+    "muted":    "#9a9a9a",
     "green":    "#3fb950",
-    "red":      "#f85149",
-    "blue":     "#58a6ff",
+    "red":      "#e8262b",
+    "accent":   "#ed1c24",
     "yellow":   "#d29922",
     "purple":   "#bc8cff",
     "orange":   "#ffa657",
@@ -133,7 +137,7 @@ class MetricTile(ctk.CTkFrame):
 
 
 class PillButton(ctk.CTkButton):
-    def __init__(self, parent, text, command=None, color=C["blue"], **kw):
+    def __init__(self, parent, text, command=None, color=C["accent"], **kw):
         super().__init__(parent, text=text, command=command,
                         fg_color=color, hover_color=_lighten(color),
                         text_color=C["white"], corner_radius=8, height=30,
@@ -198,7 +202,7 @@ class Dashboard:
         PillButton(ctrl, "🚀  Start",  self._start_bot, C["teal"]).pack(side="left", padx=3)
         PillButton(ctrl, "⏸  Pause",  self._pause,  C["yellow"]).pack(side="left", padx=3)
         PillButton(ctrl, "▶  Resume", self._resume, C["green"]).pack(side="left",  padx=3)
-        PillButton(ctrl, "⟳  Refresh",self._refresh,C["blue"]).pack(side="left",  padx=3)
+        PillButton(ctrl, "⟳  Refresh",self._refresh,C["accent"]).pack(side="left",  padx=3)
 
     def _build_tabbar(self):
         """Horizontal top tab strip (control-panel style) with an accent
@@ -381,7 +385,7 @@ class Dashboard:
         btn_row.pack(side="right")
         for period, label in (("daily","Daily"),("monthly","Monthly"),("yearly","Yearly")):
             b = PillButton(btn_row, label, lambda pr=period: self._select_report_period(pr),
-                          C["blue"] if period == "daily" else C["border"])
+                          C["accent"] if period == "daily" else C["border"])
             b.pack(side="left", padx=3)
             self._report_btns[period] = b
 
@@ -421,7 +425,7 @@ class Dashboard:
     def _select_report_period(self, period):
         self._report_period = period
         for pr, b in self._report_btns.items():
-            color = C["blue"] if pr == period else C["border"]
+            color = C["accent"] if pr == period else C["border"]
             b.configure(fg_color=color, hover_color=_lighten(color))
             b._base_color = color
         self._load_report()
@@ -480,7 +484,7 @@ class Dashboard:
         hdr.pack(fill="x", padx=16, pady=(16,8))
         tk.Label(hdr, text="News Sentiment Scores",
                 bg=C["bg"], fg=C["text"], font=FONT_TITLE).pack(side="left")
-        PillButton(hdr, "⟳  Refresh", self._load_news, C["blue"]).pack(side="right")
+        PillButton(hdr, "⟳  Refresh", self._load_news, C["accent"]).pack(side="right")
         tk.Label(hdr, text="  Combined: The Block · CoinDesk · Blockworks · Cointelegraph · Bloomberg · Forbes · Messari · CoinGecko · CMC",
                 bg=C["bg"], fg=C["muted"],
                 font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
@@ -506,7 +510,7 @@ class Dashboard:
                 fg=C["muted"],
                 font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9)
                 ).pack(side="left", padx=(0,8))
-        PillButton(preset_row, "Conservative", self._preset_conservative, C["blue"]).pack(side="left",  padx=3)
+        PillButton(preset_row, "Conservative", self._preset_conservative, C["accent"]).pack(side="left",  padx=3)
         PillButton(preset_row, "Balanced",     self._preset_balanced,     C["purple"]).pack(side="left",padx=3)
         PillButton(preset_row, "Aggressive",   self._preset_aggressive,   C["orange"]).pack(side="left",padx=3)
         tk.Label(preset_row,
@@ -537,7 +541,7 @@ class Dashboard:
 
         self.exch_enabled_var = tk.BooleanVar(value=True)
         ctk.CTkCheckBox(sel_row, text="Enabled for trading", variable=self.exch_enabled_var,
-                       fg_color=C["blue"], hover_color=_lighten(C["blue"]),
+                       fg_color=C["accent"], hover_color=_lighten(C["accent"]),
                        text_color=C["text"], font=FONT_UI).pack(side="left", padx=(0,16))
 
         PillButton(sel_row, "💾  Save Keys", self._save_exchange_credentials, C["green"]).pack(side="left")
@@ -604,7 +608,7 @@ class Dashboard:
         self.cfg_text = ctk.CTkTextbox(card, fg_color=C["surface"], text_color=C["text"],
                                       font=FONT_MONO, wrap="none", corner_radius=0,
                                       border_width=0, height=220, state="disabled")
-        self.cfg_text.tag_config("key",     foreground=C["blue"])
+        self.cfg_text.tag_config("key",     foreground=C["accent"])
         self.cfg_text.tag_config("val",     foreground=C["green"])
         self.cfg_text.tag_config("section", foreground=C["yellow"])
         self.cfg_text.tag_config("comment", foreground=C["muted"])
@@ -633,7 +637,7 @@ class Dashboard:
                             button_color=C["border"], button_hover_color=C["hover"],
                             dropdown_fg_color=C["surface"], font=FONT_MONO)
         cb.pack(side="left", padx=6)
-        PillButton(ctrl, "Load",        self._load_log,  C["blue"]).pack(side="left",  padx=3)
+        PillButton(ctrl, "Load",        self._load_log,  C["accent"]).pack(side="left",  padx=3)
         PillButton(ctrl, "Last 100",    self._tail_log,  C["purple"]).pack(side="left",padx=3)
         PillButton(ctrl, "Auto-follow", self._auto_log,  C["teal"]).pack(side="left",  padx=3)
 
@@ -660,7 +664,7 @@ class Dashboard:
             active = (name == page)
             btn.configure(fg_color=C["hover"] if active else "transparent",
                          text_color=C["white"] if active else C["muted"])
-            underline.configure(fg_color=C["blue"] if active else "transparent")
+            underline.configure(fg_color=C["accent"] if active else "transparent")
 
         for name, frame in self._page_frames.items():
             if name == page:
