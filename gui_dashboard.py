@@ -760,10 +760,6 @@ class Dashboard:
             aggr_pct = f"{aggr*100:.0f}%"
             self.root.after(0, lambda np=norm_pct: self.t_normal.set(f"${pool*norm:.2f}", f"{np} conservative"))
             self.root.after(0, lambda ap=aggr_pct: self.t_aggr.set(f"${pool*aggr:.2f}", f"{ap} aggressive", C["orange"]))
-            self.root.after(0, lambda np=norm_pct: self.normal_card.configure(
-                text=f"🟢  NORMAL POOL  —  {np}  —  Conservative") if hasattr(self.normal_card, 'configure') else None)
-            self.root.after(0, lambda ap=aggr_pct: self.aggr_card.configure(
-                text=f"🔴  AGGRESSIVE POOL  —  {ap}  —  Higher Risk/Reward") if hasattr(self.aggr_card, 'configure') else None)
             # Update pool bar — cached so _nav() can redraw it once the
             # canvas is actually visible/mapped (drawing while the Pools
             # tab is hidden reports a bogus 1px width and draws nothing).
