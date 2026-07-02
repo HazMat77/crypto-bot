@@ -2211,6 +2211,7 @@ class CoinbaseExchange(BaseExchange):
                 int.from_bytes(raw[:32], "big"), ec.SECP256R1(), default_backend()
             )
 
+        import os as _os
         now  = int(time.time())
         hdr  = {"alg": "ES256", "kid": key_name}
         body = {
@@ -2220,6 +2221,7 @@ class CoinbaseExchange(BaseExchange):
             "exp": now + 120,
             "aud": ["retail_rest_api_proxy"],
             "uri": f"{method} api.coinbase.com{path}",
+            "jti": _os.urandom(16).hex(),
         }
 
         def _b64url(obj):
