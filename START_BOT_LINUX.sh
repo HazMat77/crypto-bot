@@ -33,7 +33,7 @@ if [ -z "$PYTHON_CMD" ]; then
 fi
 
 # ── Check dependencies ───────────────────────────────────────────────────────
-if ! $PYTHON_CMD -c "import kucoin, pandas, numpy, requests, bs4" >/dev/null 2>&1; then
+if ! $PYTHON_CMD -c "import kucoin, pandas, numpy, requests, bs4, websocket" >/dev/null 2>&1; then
     echo "  Dependencies not found. Installing now from requirements.txt..."
     echo ""
     $PYTHON_CMD -m pip install -r requirements.txt --quiet 2>/dev/null \

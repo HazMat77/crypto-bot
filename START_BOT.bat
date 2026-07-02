@@ -38,7 +38,7 @@ if "%PYTHON_CMD%"=="" (
 )
 
 :: ── Check dependencies ─────────────────────────────────────────────────────────
-"%PYTHON_CMD%" -c "import kucoin, pandas, numpy, requests, bs4" >nul 2>&1
+"%PYTHON_CMD%" -c "import kucoin, pandas, numpy, requests, bs4, websocket" >nul 2>&1
 if errorlevel 1 (
     color 0E
     echo  Dependencies not found. Installing now from requirements.txt...

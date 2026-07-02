@@ -22,11 +22,12 @@ import subprocess
 import sys
 
 _PIP_NAME = {
-    "kucoin": "python-kucoin",
-    "bs4":    "beautifulsoup4",
+    "kucoin":    "python-kucoin",
+    "bs4":       "beautifulsoup4",
+    "websocket": "websocket-client",
 }
 
-_CORE     = ["kucoin", "pandas", "numpy", "requests", "bs4"]
+_CORE     = ["kucoin", "pandas", "numpy", "requests", "bs4", "websocket"]
 _OPTIONAL = ["ccxt", "matplotlib", "streamlit", "plotly"]
 _GUI      = ["customtkinter"]
 

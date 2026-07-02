@@ -127,7 +127,7 @@ echo.
 echo  (optional packages installed where available)
 
 :: Verify packages installed correctly
-%PYTHON_CMD% -c "import kucoin; import pandas; import requests" >nul 2>&1
+%PYTHON_CMD% -c "import kucoin; import pandas; import requests; import websocket" >nul 2>&1
 if errorlevel 1 (
     color 0C
     echo.

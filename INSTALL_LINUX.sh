@@ -137,11 +137,11 @@ $PYTHON_CMD -m pip install -r requirements.txt --upgrade --quiet
 # If pip refuses due to an externally-managed environment (PEP 668, common on
 # newer Debian/Ubuntu), retry with --break-system-packages or fall back to
 # a virtualenv so the install still succeeds.
-if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests" >/dev/null 2>&1; then
+if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests; import websocket" >/dev/null 2>&1; then
     echo "  Initial install didn't take — retrying with --break-system-packages..."
     $PYTHON_CMD -m pip install -r requirements.txt --upgrade --quiet --break-system-packages 2>/dev/null
 
-    if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests" >/dev/null 2>&1; then
+    if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests; import websocket" >/dev/null 2>&1; then
         echo "  Still failing — creating a virtual environment instead (./venv)..."
         $PYTHON_CMD -m venv venv
         # shellcheck disable=SC1091
@@ -155,7 +155,7 @@ echo "  (optional packages installed where available)"
 echo ""
 
 # ── Verify core packages ─────────────────────────────────────────────────────
-if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests" >/dev/null 2>&1; then
+if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests; import websocket" >/dev/null 2>&1; then
     echo "  ERROR: Package installation failed."
     echo "  Try running this script with sudo, or install manually:"
     echo "    $PYTHON_CMD -m pip install --user -r requirements.txt"

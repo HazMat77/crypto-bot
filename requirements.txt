@@ -4,6 +4,7 @@ pandas
 numpy
 requests
 beautifulsoup4
+websocket-client
 
 # Optional — used by additional exchanges, dashboards, and backtesting.
 # Not required just to run bot.py + watchdog.py against KuCoin.

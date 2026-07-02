@@ -9,7 +9,7 @@ Run: python gui_dashboard.py
 Or:  Double-click START_BOT.bat → [3] GUI Dashboard
 """
 
-import os, sys, glob, threading, importlib, re
+import os, sys, glob, threading, importlib, re, json, subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, date
@@ -19,6 +19,60 @@ import bootstrap
 bootstrap.ensure_installed(gui=True)
 
 import customtkinter as ctk
+
+# ── Exchange credential fields ────────────────────────────────────────────
+# (config.py EXCHANGES-dict field, bot_secrets.py variable name, GUI label)
+EXCHANGE_DISPLAY = {
+    "kucoin": "KuCoin", "binance": "Binance", "kraken": "Kraken", "bybit": "Bybit",
+    "okx": "OKX", "gateio": "Gate.io", "mexc": "MEXC", "webull": "Webull",
+    "virgocx": "VirgoCX", "coinbase": "Coinbase",
+}
+EXCHANGE_FIELDS = {
+    "kucoin": [
+        ("api_key", "KUCOIN_API_KEY", "API Key"),
+        ("api_secret", "KUCOIN_API_SECRET", "API Secret"),
+        ("passphrase", "KUCOIN_PASSPHRASE", "Passphrase"),
+    ],
+    "binance": [
+        ("api_key", "BINANCE_API_KEY", "API Key"),
+        ("api_secret", "BINANCE_API_SECRET", "API Secret"),
+    ],
+    "kraken": [
+        ("api_key", "KRAKEN_API_KEY", "API Key"),
+        ("api_secret", "KRAKEN_API_SECRET", "API Secret"),
+        ("futures_api_key", "KRAKEN_FUTURES_API_KEY", "Futures API Key (optional)"),
+        ("futures_api_secret", "KRAKEN_FUTURES_API_SECRET", "Futures API Secret (optional)"),
+    ],
+    "bybit": [
+        ("api_key", "BYBIT_API_KEY", "API Key"),
+        ("api_secret", "BYBIT_API_SECRET", "API Secret"),
+    ],
+    "okx": [
+        ("api_key", "OKX_API_KEY", "API Key"),
+        ("api_secret", "OKX_API_SECRET", "API Secret"),
+        ("passphrase", "OKX_PASSPHRASE", "Passphrase"),
+    ],
+    "gateio": [
+        ("api_key", "GATEIO_API_KEY", "API Key"),
+        ("api_secret", "GATEIO_API_SECRET", "API Secret"),
+    ],
+    "mexc": [
+        ("api_key", "MEXC_API_KEY", "API Key"),
+        ("api_secret", "MEXC_API_SECRET", "API Secret"),
+    ],
+    "webull": [
+        ("api_key", "WEBULL_API_KEY", "App Key"),
+        ("api_secret", "WEBULL_API_SECRET", "App Secret"),
+    ],
+    "virgocx": [
+        ("api_key", "VIRGOCX_API_KEY", "API Key"),
+        ("api_secret", "VIRGOCX_API_SECRET", "API Secret"),
+    ],
+    "coinbase": [
+        ("api_key", "COINBASE_API_KEY", "API Key Name"),
+        ("api_secret", "COINBASE_API_SECRET", "EC Private Key (PEM)"),
+    ],
+}
 
 # ── Palette ────────────────────────────────────────────────────────────────
 C = {
@@ -133,6 +187,8 @@ class Dashboard:
         root.title("CryptoTradingBot")
         root.geometry("1280x820")
         root.minsize(960, 640)
+        self._bot_proc      = None
+        self._watchdog_proc = None
         self._build()
         self._start_auto_refresh()
 
@@ -169,10 +225,13 @@ class Dashboard:
                                   font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9))
         self.clock_lbl.pack(side="left")
 
+        PillButton(bar, "⬆  Updates", self._check_updates, C["purple"]).pack(side="left", padx=(14,0))
+
         # Right controls
         ctrl = tk.Frame(bar, bg=C["surface"])
         ctrl.pack(side="right", padx=14)
 
+        PillButton(ctrl, "🚀  Start",  self._start_bot, C["teal"]).pack(side="left", padx=3)
         PillButton(ctrl, "⏸  Pause",  self._pause,  C["yellow"]).pack(side="left", padx=3)
         PillButton(ctrl, "▶  Resume", self._resume, C["green"]).pack(side="left",  padx=3)
         PillButton(ctrl, "⟳  Refresh",self._refresh,C["blue"]).pack(side="left",  padx=3)
@@ -492,12 +551,51 @@ class Dashboard:
                 font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
                 ).pack(side="left")
 
-        card = Card(p)
+        # ── Exchange API keys — lets someone who's never opened a .py file
+        # enter credentials and pick an exchange straight from the GUI.
+        ek_card = Card(p, title="EXCHANGE API KEYS")
+        ek_card.pack(fill="x", padx=16, pady=8)
+
+        sel_row = tk.Frame(ek_card, bg=C["surface"])
+        sel_row.pack(fill="x", padx=12, pady=(4,4))
+        tk.Label(sel_row, text="Exchange:", bg=C["surface"], fg=C["muted"],
+                font=FONT_UI).pack(side="left", padx=(0,8))
+
+        self._exch_display_to_key = {v: k for k, v in EXCHANGE_DISPLAY.items()}
+        self.exch_key_var = tk.StringVar(value="kucoin")
+        self.exch_combobox = ctk.CTkComboBox(
+            sel_row, values=list(EXCHANGE_DISPLAY.values()),
+            command=self._on_exchange_selected, width=160, height=30, corner_radius=8,
+            fg_color=C["bg"], border_color=C["border"], button_color=C["border"],
+            button_hover_color=C["hover"], dropdown_fg_color=C["surface"], font=FONT_UI)
+        self.exch_combobox.set(EXCHANGE_DISPLAY["kucoin"])
+        self.exch_combobox.pack(side="left", padx=(0,16))
+
+        self.exch_enabled_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(sel_row, text="Enabled for trading", variable=self.exch_enabled_var,
+                       fg_color=C["blue"], hover_color=_lighten(C["blue"]),
+                       text_color=C["text"], font=FONT_UI).pack(side="left", padx=(0,16))
+
+        PillButton(sel_row, "💾  Save Keys", self._save_exchange_credentials, C["green"]).pack(side="left")
+
+        self.exch_fields_frame = tk.Frame(ek_card, bg=C["surface"])
+        self.exch_fields_frame.pack(fill="x", padx=12, pady=(4,4))
+        self._exch_entries = {}
+        self._build_exchange_fields("kucoin")
+
+        tk.Label(ek_card,
+                text="Saved keys go to bot_secrets.py (gitignored — never committed to GitHub) "
+                    "and the selected exchange is enabled/disabled in config.py. Restart the bot to apply.",
+                bg=C["surface"], fg=C["muted"], wraplength=1150, justify="left",
+                font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
+                ).pack(anchor="w", padx=12, pady=(0,10))
+
+        card = Card(p, title="config.py (read-only preview)")
         card.pack(fill="both", expand=True, padx=16, pady=8)
 
         self.cfg_text = ctk.CTkTextbox(card, fg_color=C["surface"], text_color=C["text"],
                                       font=FONT_MONO, wrap="none", corner_radius=0,
-                                      border_width=0, state="disabled")
+                                      border_width=0, height=220, state="disabled")
         self.cfg_text.tag_config("key",     foreground=C["blue"])
         self.cfg_text.tag_config("val",     foreground=C["green"])
         self.cfg_text.tag_config("section", foreground=C["yellow"])
@@ -859,6 +957,108 @@ class Dashboard:
     #  CONTROLS
     # ══════════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _pid_alive(pid):
+        """Cross-platform PID liveness check — deliberately reimplemented
+        here rather than importing watchdog.py, since that module runs
+        logging.basicConfig() and opens a raw stdout handle at import
+        time (fine for its own standalone process, not something this
+        GUI process should also be doing as a side effect of a button)."""
+        if not pid:
+            return False
+        try:
+            if sys.platform == "win32":
+                result = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                                        capture_output=True, text=True, timeout=10)
+                return str(pid) in result.stdout
+            else:
+                os.kill(pid, 0)
+                return True
+        except (ProcessLookupError, PermissionError):
+            return False
+        except Exception:
+            return False
+
+    def _bot_is_running(self):
+        """True if logs/liveness.json shows a recent ping from a still-alive
+        PID — i.e. some bot.py process (from this GUI, a terminal, or a
+        prior session) is currently running, regardless of who started it."""
+        try:
+            with open("logs/liveness.json") as f:
+                data = json.load(f)
+            last_ping = datetime.fromisoformat(data["last_ping"])
+            if (datetime.now() - last_ping).total_seconds() > 300:
+                return False
+            return self._pid_alive(data.get("pid"))
+        except Exception:
+            return False
+
+    def _start_bot(self):
+        if self._bot_is_running():
+            messagebox.showinfo("Already Running",
+                "The bot already appears to be running (a recent liveness "
+                "ping was found in logs/liveness.json).\n\n"
+                "If this is wrong — e.g. a stale file left over from a "
+                "crash — delete logs/liveness.json and try again.")
+            return
+
+        mode = messagebox.askyesnocancel("Start Bot",
+            "Which mode?\n\n"
+            "Yes = LIVE trading (uses real money)\n"
+            "No = Paper trading (simulation)\n"
+            "Cancel = don't start")
+        if mode is None:
+            return
+        mode_str = "live" if mode else "paper"
+
+        if mode_str == "live" and not messagebox.askyesno("Confirm LIVE Trading",
+                "You are about to start the bot in LIVE mode with real funds.\n\n"
+                "Are you sure you want to continue?"):
+            return
+
+        python_cmd    = sys.executable
+        bot_path      = str(Path("bot.py").resolve())
+        watchdog_path = str(Path("watchdog.py").resolve())
+
+        try:
+            if sys.platform == "win32":
+                self._bot_proc = subprocess.Popen(
+                    [python_cmd, bot_path, "--mode", mode_str],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE)
+            else:
+                self._bot_proc = subprocess.Popen(
+                    [python_cmd, bot_path, "--mode", mode_str],
+                    start_new_session=True)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not start bot.py:\n{e}")
+            return
+
+        # Launch the watchdog alongside it, unless this GUI session already
+        # has one running — so clicking Start repeatedly doesn't stack up
+        # multiple watchdog processes racing each other on the same bot.
+        watchdog_started = False
+        if self._watchdog_proc is None or self._watchdog_proc.poll() is not None:
+            try:
+                if sys.platform == "win32":
+                    self._watchdog_proc = subprocess.Popen(
+                        [python_cmd, watchdog_path],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE)
+                else:
+                    self._watchdog_proc = subprocess.Popen(
+                        [python_cmd, watchdog_path],
+                        start_new_session=True)
+                watchdog_started = True
+            except Exception as e:
+                messagebox.showwarning("Watchdog",
+                    f"Bot started, but could not launch watchdog.py:\n{e}")
+
+        self.status_badge.configure(text=f"●  STARTING ({mode_str.upper()})", fg=C["teal"])
+        messagebox.showinfo("Started",
+            f"Bot started in {mode_str.upper()} mode"
+            f"{', with the watchdog running alongside it' if watchdog_started else ' (watchdog already running from this session)'}.\n\n"
+            "Give it a few seconds, then click Refresh.")
+        self.root.after(3000, self._refresh)
+
     def _pause(self):
         if messagebox.askyesno("Pause Bot",
             "Pause all new buy orders?\nExisting positions continue to be monitored."):
@@ -940,6 +1140,170 @@ class Dashboard:
             messagebox.showerror("Error", str(e))
 
     # ══════════════════════════════════════════════════════════════════════
+    #  EXCHANGE API KEYS  (writes bot_secrets.py + config.py, no .py editing
+    #  required — this is the on-ramp for anyone who's never touched the code)
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _on_exchange_selected(self, display_value):
+        key = self._exch_display_to_key.get(display_value, "kucoin")
+        self.exch_key_var.set(key)
+        self._build_exchange_fields(key)
+
+    def _build_exchange_fields(self, exchange_key):
+        for w in self.exch_fields_frame.winfo_children():
+            w.destroy()
+        self._exch_entries = {}
+
+        current_values, enabled = {}, True
+        try:
+            import config as cfg
+            importlib.reload(cfg)
+            current_values = cfg.EXCHANGES.get(exchange_key, {})
+            enabled = current_values.get("enabled", False)
+        except Exception:
+            pass
+        self.exch_enabled_var.set(bool(enabled))
+
+        for field_key, secret_var, label in EXCHANGE_FIELDS[exchange_key]:
+            row = tk.Frame(self.exch_fields_frame, bg=C["surface"])
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=label, bg=C["surface"], fg=C["muted"], width=26,
+                    anchor="w",
+                    font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9)
+                    ).pack(side="left")
+            entry = ctk.CTkEntry(row, height=28, corner_radius=6, fg_color=C["bg"],
+                                border_color=C["border"], text_color=C["text"],
+                                font=FONT_MONO)
+            val = current_values.get(field_key, "")
+            if val:
+                entry.insert(0, str(val))
+            entry.pack(side="left", fill="x", expand=True, padx=(0,12))
+            self._exch_entries[field_key] = entry
+
+    def _save_exchange_credentials(self):
+        exchange_key = self.exch_key_var.get()
+        fields = EXCHANGE_FIELDS[exchange_key]
+        values = {secret_var: self._exch_entries[field_key].get().strip()
+                 for field_key, secret_var, _label in fields}
+        enabled = bool(self.exch_enabled_var.get())
+
+        if not messagebox.askyesno("Save API Keys",
+                f"Save {EXCHANGE_DISPLAY[exchange_key]} credentials to bot_secrets.py "
+                f"and set it {'enabled' if enabled else 'disabled'} for trading in config.py?\n\n"
+                "Restart the bot for this to take effect."):
+            return
+
+        try:
+            self._write_bot_secrets(values)
+            self._write_exchange_enabled(exchange_key, enabled)
+            messagebox.showinfo("Saved",
+                f"{EXCHANGE_DISPLAY[exchange_key]} credentials saved.\n"
+                "Restart the bot (or click Start) to apply.")
+            self._refresh()
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save credentials:\n{e}")
+
+    def _write_bot_secrets(self, values: dict):
+        """Writes API key/secret values into bot_secrets.py, creating it
+        from bot_secrets.example.py first if it doesn't exist yet (it's
+        gitignored, so a fresh clone never has one). repr() is used for
+        the replacement value rather than manual quoting so any embedded
+        quotes/backslashes/newlines round-trip safely as valid Python."""
+        secrets_path = Path("bot_secrets.py")
+        if secrets_path.exists():
+            content = secrets_path.read_text(encoding="utf-8")
+        else:
+            content = Path("bot_secrets.example.py").read_text(encoding="utf-8")
+
+        for var_name, value in values.items():
+            pattern = re.compile(r"^" + re.escape(var_name) + r"\s*=.*$", re.MULTILINE)
+            replacement = f"{var_name} = {value!r}"
+            if pattern.search(content):
+                content = pattern.sub(replacement, content, count=1)
+            else:
+                content += f"\n{replacement}\n"
+
+        secrets_path.write_text(content, encoding="utf-8")
+
+    def _write_exchange_enabled(self, exchange_key, enabled: bool):
+        """Flips the "enabled" flag inside that exchange's block in
+        config.py's EXCHANGES dict. Scoped to just that block (matches
+        the opening `"exchange_key": {` line, then the "enabled" line
+        right after it) so it can't accidentally touch another
+        exchange's flag."""
+        config_path = Path("config.py")
+        content = config_path.read_text(encoding="utf-8")
+        pattern = re.compile(
+            r'("' + re.escape(exchange_key) + r'"\s*:\s*\{\s*\n\s*"enabled"\s*:\s*)(True|False)')
+        new_content, n = pattern.subn(lambda m: m.group(1) + str(enabled), content, count=1)
+        if n == 0:
+            raise ValueError(f"Could not find '{exchange_key}' in config.py's EXCHANGES dict")
+        config_path.write_text(new_content, encoding="utf-8")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  UPDATES  (reuses auto_updater.py — the same module bot.py's own
+    #  background update-checker and the /update Telegram command use)
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _check_updates(self, silent=False):
+        def _work():
+            try:
+                import auto_updater
+                import config as cfg
+                importlib.reload(cfg)
+                result = auto_updater.check_for_update(cfg)
+            except Exception as e:
+                result = {"update_available": False, "reason": f"Update check failed: {e}"}
+            self.root.after(0, lambda: self._on_update_check_result(result, silent))
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _on_update_check_result(self, result, silent=False):
+        if not result.get("update_available"):
+            if not silent:
+                reason = result.get("reason") or ""
+                messagebox.showinfo("Updates",
+                    "You're up to date." if reason in ("", "Already up to date")
+                    else f"Could not check for updates:\n{reason}")
+            return
+
+        local  = (result.get("local_commit")  or "?")[:8]
+        remote = (result.get("remote_commit") or "?")[:8]
+        if not messagebox.askyesno("Update Available",
+                f"A new version is available.\n\n"
+                f"Current: {local}\nNew:     {remote}\n\n"
+                "Your API keys in bot_secrets.py are gitignored — an update "
+                "never touches that file, so there's nothing to re-enter "
+                "afterward.\n\n"
+                "Pull the update now? (Restart the bot and this GUI "
+                "afterward to run the new version.)"):
+            return
+
+        def _apply():
+            err = None
+            try:
+                import auto_updater
+                import config as cfg
+                importlib.reload(cfg)
+                ok = auto_updater.perform_update(cfg)
+            except Exception as e:
+                ok, err = False, str(e)
+            self.root.after(0, lambda: self._on_update_applied(ok, err))
+        threading.Thread(target=_apply, daemon=True).start()
+
+    def _on_update_applied(self, ok, err):
+        if ok:
+            messagebox.showinfo("Update Applied",
+                "Update pulled successfully. Your bot_secrets.py credentials "
+                "were untouched (gitignored) — no need to re-enter them.\n\n"
+                "Please restart the bot and this GUI to run the new version.")
+        else:
+            messagebox.showerror("Update Failed",
+                err or "The update could not be applied — check logs/watchdog.log "
+                      "or the console for details. A common cause is uncommitted "
+                      "local edits to a tracked file (e.g. a hand-edited "
+                      "config.py) blocking the pull; commit or discard those first.")
+
+    # ══════════════════════════════════════════════════════════════════════
     #  AUTO-REFRESH
     # ══════════════════════════════════════════════════════════════════════
 
@@ -947,6 +1311,15 @@ class Dashboard:
         self._refresh()
         self._load_news()
         self._tick()
+        self.root.after(15_000, lambda: self._check_updates(silent=True))
+        self._schedule_update_check()
+
+    def _schedule_update_check(self):
+        self.root.after(3_600_000, self._periodic_update_check)   # hourly
+
+    def _periodic_update_check(self):
+        self._check_updates(silent=True)
+        self._schedule_update_check()
 
     def _tick(self):
         self._update_clock()
