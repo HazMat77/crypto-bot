@@ -13,3 +13,14 @@ fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false
+
+# AMD Adrenaline-style dark + red theme — same hex values as the "C" palette
+# in gui_dashboard.py, so the desktop GUI and this web/Android GUI read as
+# the same application rather than two different-looking tools.
+[theme]
+base = "dark"
+primaryColor = "#ed1c24"
+backgroundColor = "#0a0a0a"
+secondaryBackgroundColor = "#171717"
+textColor = "#f2f2f2"
+font = "sans serif"

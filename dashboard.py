@@ -40,10 +40,20 @@ try:
     import streamlit as st
     import plotly.graph_objects as go
     import plotly.express as px
+    import plotly.io as pio
 except ImportError:
     print("Install dashboard dependencies: pip install streamlit plotly")
     print("Then run: streamlit run dashboard.py")
     sys.exit(1)
+
+# Plotly defaults to a white background, which would clash badly against
+# the dark theme below — give every chart the same dark surface color as
+# the rest of the page instead of fixing this per-chart.
+pio.templates["hazmat_dark"] = pio.templates["plotly_dark"]
+pio.templates["hazmat_dark"].layout.paper_bgcolor = "#171717"
+pio.templates["hazmat_dark"].layout.plot_bgcolor  = "#171717"
+pio.templates["hazmat_dark"].layout.font.color    = "#f2f2f2"
+pio.templates.default = "hazmat_dark"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -109,30 +119,42 @@ def _launch_bot_and_watchdog(mode_str: str):
         st.session_state["watchdog_pid"] = wd_proc.pid
 
 # ── Page config ────────────────────────────────────────────────────────────
+# Sidebar starts collapsed and stays unused on purpose — navigation lives in
+# a top tab bar instead, matching the desktop GUI's layout (see TOP BAR
+# section below) rather than Streamlit's default sidebar-app look.
 st.set_page_config(
     page_title="HazMat Crypto Bot",
     page_icon="🔥",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ── Custom CSS ─────────────────────────────────────────────────────────────
+# Same hex values as gui_dashboard.py's "C" palette — rounded cards, AMD-red
+# accents on native widgets (buttons/checkboxes/sliders already themed dark+
+# red via .streamlit/config.toml; this fills in the parts that config can't
+# reach: card corners, metric tiles, the fire-gradient wordmark).
 st.markdown("""
 <style>
-    .metric-card {
-        background: #1e2130; border-radius: 8px;
-        padding: 12px 16px; margin: 4px 0;
+    [data-testid="stMetric"], div[data-testid="stVerticalBlockBorderWrapper"] {
+        background: #171717; border: 1px solid #2b2b2b; border-radius: 14px;
     }
-    .pos { color: #1D9E75; font-weight: 600; }
-    .neg { color: #D85A30; font-weight: 600; }
-    .neutral { color: #888780; }
     div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+    .pos { color: #3fb950; font-weight: 600; }
+    .neg { color: #e8262b; font-weight: 600; }
+    .neutral { color: #9a9a9a; }
     .fire-text {
         background: linear-gradient(90deg, #7f0000, #e8451e, #ff9e00, #ffc300);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
         font-weight: 800;
+    }
+    /* Tab-bar buttons: flatten the default button chrome so the row reads
+       as tabs (accent underline via the primary-red fill on the active
+       one) rather than a stack of separate buttons. */
+    div[data-testid="stHorizontalBlock"] button {
+        border-radius: 8px 8px 0 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -223,100 +245,116 @@ def load_news_scores():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR
+#  TOP BAR  —  logo/status row + control cluster + tab bar, deliberately NOT
+#  the sidebar-app layout Streamlit defaults to. This mirrors gui_dashboard.py
+#  (desktop) structurally: title bar, then a control-button row, then a top
+#  tab bar, then full-width content — so this and the desktop GUI read as
+#  the same application instead of two different-looking tools.
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.sidebar.markdown(
-    '<h1 style="margin-bottom:0;">🔥 <span class="fire-text">HazMat</span> Crypto Bot</h1>',
-    unsafe_allow_html=True)
-st.sidebar.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
-
-page = st.sidebar.radio("Navigation", [
-    "📊 Overview",
-    "📈 Backtest Results",
-    "🎲 Monte Carlo",
-    "🔗 Correlation",
-    "📰 News Scores",
-    "⚙️ Config",
-])
-
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
-
 cfg = load_config()
-mode_tag = "📄 PAPER" if cfg.get("PAPER_TRADING", True) else "💰 LIVE"
-st.sidebar.markdown(f"**Mode:** {mode_tag}")
-st.sidebar.markdown(f"**AI:** {'✅ ON' if cfg.get('AI_ENABLED') else '❌ OFF'}")
-st.sidebar.markdown(f"**Telegram:** {'✅' if cfg.get('TELEGRAM_ENABLED') else '❌'}")
-st.sidebar.markdown(f"**Listings:** {'✅' if cfg.get('LISTING_HUNTER') else '❌'}")
-
-# ── Bot control ────────────────────────────────────────────────────────────
-st.sidebar.divider()
-st.sidebar.subheader("Bot Control")
-
+mode_tag    = "📄 PAPER" if cfg.get("PAPER_TRADING", True) else "💰 LIVE"
 bot_running = _bot_is_running()
-st.sidebar.caption(f"Status: {'🟢 Running' if bot_running else '⚪ Not running'}")
 
-if bot_running:
-    st.sidebar.button("🚀 Start", disabled=True, use_container_width=True,
-                      help="Already running — a recent liveness ping was found")
-else:
-    launch_mode = st.sidebar.radio("Launch mode", ["Paper", "Live"],
-                                   horizontal=True, key="launch_mode")
-    live_confirmed = True
-    if launch_mode == "Live":
-        live_confirmed = st.sidebar.checkbox(
-            "I understand this uses real funds", key="confirm_live")
-    if st.sidebar.button("🚀 Start Bot + Watchdog", use_container_width=True,
-                         disabled=not live_confirmed):
-        _launch_bot_and_watchdog(launch_mode.lower())
-        st.sidebar.success(f"Started in {launch_mode.upper()} mode.")
-        st.rerun()
+top_l, top_r = st.columns([5, 5])
+with top_l:
+    st.markdown(
+        '<h2 style="margin-bottom:0;">🔥 <span class="fire-text">HazMat</span> Crypto Bot</h2>',
+        unsafe_allow_html=True)
+    st.caption(f"{mode_tag}  ·  AI {'ON' if cfg.get('AI_ENABLED') else 'OFF'}  ·  "
+              f"Telegram {'ON' if cfg.get('TELEGRAM_ENABLED') else 'OFF'}  ·  "
+              f"{'🟢 Running' if bot_running else '⚪ Not running'}  ·  "
+              f"Updated {datetime.now().strftime('%H:%M:%S')}")
 
-col_pause, col_resume = st.sidebar.columns(2)
-with col_pause:
-    if st.button("⏸ Pause", use_container_width=True):
-        Path(".bot_pause").touch()
-        st.sidebar.success("Paused — new buys stopped.")
-with col_resume:
-    if st.button("▶ Resume", use_container_width=True):
-        Path(".bot_pause").unlink(missing_ok=True)
-        st.sidebar.success("Resumed.")
+with top_r:
+    c_start, c_pause, c_resume, c_refresh, c_update = st.columns(5)
 
-# ── Updates — reuses auto_updater.py, the same module bot.py's own
-# background checker and the desktop GUI's Updates button use. Works
-# identically on Android (Termux ships git).
-st.sidebar.divider()
-if st.sidebar.button("⬆️ Check for Updates", use_container_width=True):
-    try:
-        import auto_updater
-        import config as _cfg_mod
-        result = auto_updater.check_for_update(_cfg_mod)
-    except Exception as e:
-        result = {"update_available": False, "reason": f"Update check failed: {e}"}
-
-    if result.get("update_available"):
-        local  = (result.get("local_commit")  or "?")[:8]
-        remote = (result.get("remote_commit") or "?")[:8]
-        st.sidebar.warning(f"Update available: {local} → {remote}")
-        st.sidebar.caption("bot_secrets.py is gitignored — an update never touches it, "
-                           "nothing to re-enter afterward.")
-        if st.sidebar.button("⬆️ Pull Update Now", use_container_width=True):
-            try:
-                import config as _cfg_mod2
-                ok = auto_updater.perform_update(_cfg_mod2)
-            except Exception as e:
-                ok, err = False, str(e)
+    with c_start:
+        with st.popover("🚀 Start", use_container_width=True):
+            if bot_running:
+                st.caption("Already running — a recent liveness ping was found.")
             else:
-                err = None
-            if ok:
-                st.sidebar.success("Updated. Restart the bot and this dashboard to run the new version.")
-            else:
-                st.sidebar.error(err or "Update failed — see logs/watchdog.log for details.")
-    else:
-        reason = result.get("reason") or ""
-        st.sidebar.info("Up to date." if reason in ("", "Already up to date") else reason)
+                launch_mode = st.radio("Mode", ["Paper", "Live"],
+                                       horizontal=True, key="launch_mode")
+                live_confirmed = True
+                if launch_mode == "Live":
+                    live_confirmed = st.checkbox(
+                        "I understand this uses real funds", key="confirm_live")
+                if st.button("Start Bot + Watchdog", use_container_width=True,
+                             disabled=not live_confirmed):
+                    _launch_bot_and_watchdog(launch_mode.lower())
+                    st.success(f"Started in {launch_mode.upper()} mode.")
+                    st.rerun()
+
+    with c_pause:
+        if st.button("⏸ Pause", use_container_width=True):
+            Path(".bot_pause").touch()
+            st.toast("Paused — new buys stopped.")
+    with c_resume:
+        if st.button("▶ Resume", use_container_width=True):
+            Path(".bot_pause").unlink(missing_ok=True)
+            st.toast("Resumed.")
+    with c_refresh:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+    with c_update:
+        # Reuses auto_updater.py, the same module bot.py's own background
+        # checker and the desktop GUI's Updates button use. Works
+        # identically on Android (Termux ships git).
+        with st.popover("⬆️ Updates", use_container_width=True):
+            if st.button("Check for Updates", use_container_width=True, key="check_updates"):
+                try:
+                    import auto_updater
+                    import config as _cfg_mod
+                    result = auto_updater.check_for_update(_cfg_mod)
+                except Exception as e:
+                    result = {"update_available": False, "reason": f"Update check failed: {e}"}
+                st.session_state["update_check_result"] = result
+
+            result = st.session_state.get("update_check_result")
+            if result:
+                if result.get("update_available"):
+                    local  = (result.get("local_commit")  or "?")[:8]
+                    remote = (result.get("remote_commit") or "?")[:8]
+                    st.warning(f"Update available: {local} → {remote}")
+                    st.caption("bot_secrets.py is gitignored — an update never touches "
+                              "it, nothing to re-enter afterward.")
+                    if st.button("Pull Update Now", use_container_width=True):
+                        try:
+                            import config as _cfg_mod2
+                            ok = auto_updater.perform_update(_cfg_mod2)
+                        except Exception as e:
+                            ok, err = False, str(e)
+                        else:
+                            err = None
+                        if ok:
+                            st.success("Updated. Restart the bot and this dashboard "
+                                      "to run the new version.")
+                        else:
+                            st.error(err or "Update failed — see logs/watchdog.log for details.")
+                else:
+                    reason = result.get("reason") or ""
+                    st.info("Up to date." if reason in ("", "Already up to date") else reason)
+
+st.divider()
+
+# ── Tab bar ────────────────────────────────────────────────────────────────
+PAGES = ["📊 Overview", "📈 Backtest Results", "🎲 Monte Carlo",
+        "🔗 Correlation", "📰 News Scores", "⚙️ Config"]
+st.session_state.setdefault("active_page", PAGES[0])
+
+tab_cols = st.columns(len(PAGES))
+for _i, _p in enumerate(PAGES):
+    with tab_cols[_i]:
+        if st.button(_p, key=f"tab_{_p}", use_container_width=True,
+                     type="primary" if st.session_state["active_page"] == _p else "secondary"):
+            st.session_state["active_page"] = _p
+            st.rerun()
+
+page = st.session_state["active_page"]
+st.divider()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
