@@ -2230,13 +2230,9 @@ class CoinbaseExchange(BaseExchange):
         return f"{_b64url(hdr)}.{_b64url(body)}.{sig_b64}"
 
     def _is_legacy_key(self):
-        """UUID-format keys (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) are legacy HMAC keys."""
-        import re
+        """CDP keys start with 'organizations/' — everything else is a legacy HMAC UUID key."""
         key = self.credentials.get("api_key", "")
-        return bool(re.match(
-            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-            key, re.I
-        ))
+        return not key.startswith("organizations/")
 
     def _hmac_headers(self, method, path, body=""):
         """Legacy API key auth: CB-ACCESS-KEY + HMAC-SHA256 signature."""
