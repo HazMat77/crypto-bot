@@ -590,6 +590,50 @@ class Dashboard:
                 font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
                 ).pack(anchor="w", padx=12, pady=(0,10))
 
+        # ── Bot settings — the everyday toggles someone would otherwise
+        # have to open config.py to flip.
+        bs_card = Card(p, title="BOT SETTINGS")
+        bs_card.pack(fill="x", padx=16, pady=8)
+
+        bs_row = tk.Frame(bs_card, bg=C["surface"])
+        bs_row.pack(fill="x", padx=12, pady=(4,4))
+
+        self.ai_enabled_var       = tk.BooleanVar(value=True)
+        self.telegram_enabled_var = tk.BooleanVar(value=True)
+        self.watchdog_restart_var = tk.BooleanVar(value=False)
+        self.default_mode_var     = tk.BooleanVar(value=False)   # False=Paper, True=Live
+
+        for var, label in (
+            (self.ai_enabled_var,       "AI Analyst"),
+            (self.default_mode_var,     "Default mode: LIVE (off = Paper)"),
+            (self.telegram_enabled_var, "Telegram Notifications"),
+            (self.watchdog_restart_var, "Watchdog Auto-Restart"),
+        ):
+            ctk.CTkSwitch(bs_row, text=label, variable=var, onvalue=True, offvalue=False,
+                        progress_color=C["green"], button_color=C["text"],
+                        text_color=C["text"], font=FONT_UI).pack(side="left", padx=(0,20))
+
+        bs_row2 = tk.Frame(bs_card, bg=C["surface"])
+        bs_row2.pack(fill="x", padx=12, pady=(8,4))
+        tk.Label(bs_row2, text="Paper Starting Pool (USDT):", bg=C["surface"], fg=C["muted"],
+                font=FONT_UI).pack(side="left", padx=(0,8))
+        self.paper_pool_entry = ctk.CTkEntry(bs_row2, width=100, height=28, corner_radius=6,
+                                            fg_color=C["bg"], border_color=C["border"],
+                                            text_color=C["text"], font=FONT_MONO)
+        self.paper_pool_entry.pack(side="left", padx=(0,20))
+
+        PillButton(bs_row2, "💾  Save Settings", self._save_bot_settings, C["green"]).pack(side="left")
+
+        tk.Label(bs_card,
+                text="\"Default mode\" only applies when the bot is launched without an explicit "
+                    "mode — the Start button's own Paper/Live prompt always takes priority over it. "
+                    "Restart the bot to apply any of these.",
+                bg=C["surface"], fg=C["muted"], wraplength=1150, justify="left",
+                font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
+                ).pack(anchor="w", padx=12, pady=(0,10))
+
+        self._load_bot_settings()
+
         card = Card(p, title="config.py (read-only preview)")
         card.pack(fill="both", expand=True, padx=16, pady=8)
 
@@ -1120,24 +1164,69 @@ class Dashboard:
             "config.py will be updated. Restart bot to apply."):
             return
         try:
-            with open("config.py","r", encoding="utf-8") as f:
-                content = f.read()
-            for key,val in [
-                ("NORMAL_RSI_BUY",nb),("NORMAL_RSI_SELL",ns),
-                ("NORMAL_STOP_LOSS",nsl),("NORMAL_TAKE_PROFIT",ntp),
-                ("AGGRESSIVE_RSI_BUY",ab),("AGGRESSIVE_RSI_SELL",as_),
-                ("AGGRESSIVE_STOP_LOSS",asl),("AGGRESSIVE_TAKE_PROFIT",atp),
-            ]:
-                content = re.sub(
-                    rf"^({re.escape(key)}\s*=\s*)(.+?)(\s*(?:#.*)?)$",
-                    rf"\g<1>{val}\g<3>",
-                    content, flags=re.MULTILINE)
-            with open("config.py","w", encoding="utf-8") as f:
-                f.write(content)
+            self._write_config_values({
+                "NORMAL_RSI_BUY":nb, "NORMAL_RSI_SELL":ns,
+                "NORMAL_STOP_LOSS":nsl, "NORMAL_TAKE_PROFIT":ntp,
+                "AGGRESSIVE_RSI_BUY":ab, "AGGRESSIVE_RSI_SELL":as_,
+                "AGGRESSIVE_STOP_LOSS":asl, "AGGRESSIVE_TAKE_PROFIT":atp,
+            })
             messagebox.showinfo("Done", f"{name} preset applied.\nRestart bot to activate.")
             self._refresh()
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+    def _write_config_values(self, updates: dict):
+        """Shared regex-based line replacement for simple `KEY = value`
+        assignments in config.py — used by presets and Bot Settings alike.
+        Only touches the exact keys given; everything else in the file,
+        including comments and the EXCHANGES dict, is left untouched."""
+        with open("config.py", "r", encoding="utf-8") as f:
+            content = f.read()
+        for key, val in updates.items():
+            content = re.sub(
+                rf"^({re.escape(key)}\s*=\s*)(.+?)(\s*(?:#.*)?)$",
+                rf"\g<1>{val}\g<3>",
+                content, flags=re.MULTILINE)
+        with open("config.py", "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def _load_bot_settings(self):
+        try:
+            import config as cfg
+            importlib.reload(cfg)
+            self.ai_enabled_var.set(bool(getattr(cfg, "AI_ENABLED", True)))
+            self.telegram_enabled_var.set(bool(getattr(cfg, "TELEGRAM_ENABLED", True)))
+            self.watchdog_restart_var.set(bool(getattr(cfg, "WATCHDOG_AUTO_RESTART", False)))
+            self.default_mode_var.set(not bool(getattr(cfg, "PAPER_TRADING", True)))
+            self.paper_pool_entry.delete(0, "end")
+            self.paper_pool_entry.insert(0, str(getattr(cfg, "PAPER_STARTING_USDT", 100.0)))
+        except Exception:
+            pass
+
+    def _save_bot_settings(self):
+        try:
+            pool = float(self.paper_pool_entry.get().strip())
+            if pool <= 0:
+                raise ValueError("Starting pool must be a positive number")
+        except ValueError as e:
+            messagebox.showerror("Invalid Value", f"Paper Starting Pool: {e}")
+            return
+
+        if not messagebox.askyesno("Save Settings",
+                "Save these bot settings to config.py?\nRestart the bot to apply."):
+            return
+        try:
+            self._write_config_values({
+                "AI_ENABLED":              self.ai_enabled_var.get(),
+                "PAPER_TRADING":           not self.default_mode_var.get(),
+                "TELEGRAM_ENABLED":        self.telegram_enabled_var.get(),
+                "WATCHDOG_AUTO_RESTART":   self.watchdog_restart_var.get(),
+                "PAPER_STARTING_USDT":     pool,
+            })
+            messagebox.showinfo("Saved", "Bot settings saved.\nRestart the bot to apply.")
+            self._refresh()
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save settings:\n{e}")
 
     # ══════════════════════════════════════════════════════════════════════
     #  EXCHANGE API KEYS  (writes bot_secrets.py + config.py, no .py editing
