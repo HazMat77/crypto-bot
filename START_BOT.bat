@@ -38,12 +38,18 @@ if "%PYTHON_CMD%"=="" (
 )
 
 :: ── Check dependencies ─────────────────────────────────────────────────────────
-"%PYTHON_CMD%" -c "import kucoin, pandas, numpy, requests, bs4, websocket" >nul 2>&1
+:: Includes customtkinter since the GUI is the default launch target now —
+:: without this check here, a missing customtkinter would only get caught
+:: (and silently installed) once gui_dashboard.py itself starts, which is
+:: harder to see happening.
+"%PYTHON_CMD%" -c "import kucoin, pandas, numpy, requests, bs4, websocket, customtkinter" >nul 2>&1
 if errorlevel 1 (
     color 0E
     echo  Dependencies not found. Installing now from requirements.txt...
+    echo  This can take a few minutes on first run — please wait, do not
+    echo  close this window even if it looks idle for a while.
     echo.
-    "%PYTHON_CMD%" -m pip install -r requirements.txt --quiet --no-warn-script-location
+    "%PYTHON_CMD%" -m pip install -r requirements.txt --no-warn-script-location
     echo.
 )
 

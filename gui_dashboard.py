@@ -163,6 +163,14 @@ class Dashboard:
     # ══════════════════════════════════════════════════════════════════════
 
     def _build(self):
+        # Windows' default ttk theme ("vista") renders Treeview using
+        # native Win32 chrome and silently ignores style overrides like
+        # fieldbackground/background — the rows area stays white no
+        # matter what color is configured. "clam" is a theme ttk draws
+        # itself rather than delegating to the OS, so it actually honors
+        # the custom dark colors below on every platform, not just Linux/
+        # macOS (where the default theme happens to already respect them).
+        ttk.Style().theme_use("clam")
         self._build_topbar()
         self._build_tabbar()
         self._build_main()
@@ -290,10 +298,16 @@ class Dashboard:
         style = ttk.Style()
         style.configure("Pos.Treeview", background=C["surface"],
                        foreground=C["text"], fieldbackground=C["surface"],
-                       rowheight=28, font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9))
+                       borderwidth=0, rowheight=28,
+                       font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9))
         style.configure("Pos.Treeview.Heading", background=C["border"],
-                       foreground=C["muted"],
+                       foreground=C["muted"], borderwidth=0,
                        font=("Segoe UI",8,"bold") if sys.platform=="win32" else ("SF Pro",8,"bold"))
+        # Selected-row color — "clam"'s own default is a blue that clashes
+        # with the dark+red theme; map it to the accent red instead.
+        style.map("Pos.Treeview",
+                 background=[("selected", C["accent"])],
+                 foreground=[("selected", C["white"])])
         self.pos_tree.configure(style="Pos.Treeview")
         for c, w in zip(cols, [70,90,100,100,80]):
             self.pos_tree.heading(c, text=c); self.pos_tree.column(c, width=w, anchor="center")

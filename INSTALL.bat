@@ -120,10 +120,12 @@ set "PATH=%SCRIPTS_DIR%;%PATH%"
 :: this project adds in the future is picked up automatically — no need to
 :: keep this script's package list in sync by hand.
 echo  Step: Installing bot dependencies from requirements.txt...
+echo  This can take a few minutes on first run — please wait, do not
+echo  close this window even if it looks idle for a while.
 echo.
 
-%PYTHON_CMD% -m pip install --upgrade pip --quiet --no-warn-script-location
-%PYTHON_CMD% -m pip install -r requirements.txt --upgrade --quiet --no-warn-script-location
+%PYTHON_CMD% -m pip install --upgrade pip --no-warn-script-location
+%PYTHON_CMD% -m pip install -r requirements.txt --upgrade --no-warn-script-location
 echo  (optional packages installed where available)
 
 :: Verify packages installed correctly

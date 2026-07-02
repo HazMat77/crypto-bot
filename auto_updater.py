@@ -54,6 +54,8 @@ CONFIG (see config.py):
   AUTO_UPDATE_MODE               — "notify_only" (default) | "require_approval" | "auto_apply"
 """
 
+import re
+import shutil
 import subprocess
 import logging
 import json
@@ -63,6 +65,20 @@ from datetime import datetime
 log = logging.getLogger(__name__)
 
 GRACEFUL_UPDATE_FLAG = Path("logs/graceful_update.flag")
+
+# Files/dirs a zip-based update must never touch — the local, per-machine
+# state that a fresh zip extract from GitHub would otherwise clobber.
+# Mirrors what git's own update path already leaves alone for free
+# (bot_secrets.py/logs/ are gitignored; config.py is handled separately
+# via backup+restore since it IS tracked).
+_ZIP_UPDATE_PRESERVE = {
+    "config.py", "bot_secrets.py", "logs", "python_path.txt",
+    ".git", "venv", ".venv", "__pycache__",
+}
+
+
+def _github_repo_slug(cfg) -> str:
+    return getattr(cfg, "AUTO_UPDATE_GITHUB_REPO", "HazMat77/crypto-bot")
 
 
 def _run_git(args: list, cwd: Path) -> tuple:
@@ -90,13 +106,17 @@ def is_git_repo(repo_dir: Path) -> bool:
 
 def has_local_changes(repo_dir: Path) -> bool:
     """
-    True if there are uncommitted changes to TRACKED files. Untracked
-    files (bot_secrets.py, logs/, __pycache__/ — all gitignored) don't
-    count, since `git status --porcelain` only lists tracked-file
-    modifications and untracked files separately; we only check the
-    former here on purpose.
+    True if there are uncommitted changes to TRACKED files, EXCLUDING
+    config.py. config.py is tracked (it ships with default values) but
+    the GUI now writes exchange credentials, AI settings, and bot
+    settings directly into it via settings_writer.py — so on any machine
+    that's used the GUI, config.py always shows as locally modified.
+    Without excluding it here, that one file would permanently block
+    every future update for every GUI user. config.py itself is handled
+    separately in perform_update() (backed up and restored around the
+    pull) so local settings survive regardless.
     """
-    ok, out = _run_git(["diff", "--name-only", "HEAD"], repo_dir)
+    ok, out = _run_git(["diff", "--name-only", "HEAD", "--", ".", ":!config.py"], repo_dir)
     if not ok:
         return False   # can't tell — caller treats this as "don't know, proceed cautiously"
     return bool(out.strip())
@@ -119,10 +139,7 @@ def check_for_update(cfg, repo_dir: Path = None) -> dict:
     branch   = getattr(cfg, "AUTO_UPDATE_BRANCH", "main")
 
     if not is_git_repo(repo_dir):
-        return {"update_available": False, "local_commit": None,
-                "remote_commit": None,
-                "reason": "Not a git repository — auto-update requires "
-                         "the bot to be a git clone, not a standalone .zip extract"}
+        return _check_for_update_zip(cfg)
 
     ok, _ = _run_git(["fetch", remote, branch], repo_dir)
     if not ok:
@@ -143,6 +160,115 @@ def check_for_update(cfg, repo_dir: Path = None) -> dict:
 
     return {"update_available": True, "local_commit": local_commit,
             "remote_commit": remote_commit, "reason": ""}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ZIP FALLBACK — for installs that are a plain .zip extract, not a git
+#  clone. Same public interface (check_for_update/perform_update return the
+#  same dict shape / True-False), so callers (GUI, /update command) never
+#  need to know which path is actually in use.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _fetch_remote_version(cfg) -> str:
+    """Fetches version.py's __version__ straight off GitHub (raw file, no
+    git/API auth needed) for the configured branch. Returns None on any
+    failure — network down, repo renamed, etc."""
+    import requests
+    repo   = _github_repo_slug(cfg)
+    branch = getattr(cfg, "AUTO_UPDATE_BRANCH", "main")
+    url    = f"https://raw.githubusercontent.com/{repo}/{branch}/version.py"
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', resp.text)
+        return m.group(1) if m else None
+    except Exception as e:
+        log.warning(f"[UPDATE] Could not fetch remote version.py: {e}")
+        return None
+
+
+def _local_version() -> str:
+    try:
+        from version import __version__
+        return __version__
+    except Exception:
+        return None
+
+
+def _check_for_update_zip(cfg) -> dict:
+    local_version  = _local_version()
+    remote_version = _fetch_remote_version(cfg)
+
+    if not remote_version:
+        return {"update_available": False, "local_commit": local_version,
+                "remote_commit": None,
+                "reason": "Could not reach GitHub to check for updates "
+                         "(no network, or repo unreachable)"}
+    if not local_version:
+        return {"update_available": False, "local_commit": None,
+                "remote_commit": remote_version,
+                "reason": "Could not read local version.py"}
+
+    if local_version == remote_version:
+        return {"update_available": False, "local_commit": local_version,
+                "remote_commit": remote_version, "reason": "Already up to date"}
+
+    return {"update_available": True, "local_commit": local_version,
+            "remote_commit": remote_version, "reason": ""}
+
+
+def perform_update_zip(cfg, repo_dir: Path) -> tuple:
+    """
+    Downloads the configured branch's zipball from GitHub, extracts it,
+    and copies files over repo_dir — skipping anything in
+    _ZIP_UPDATE_PRESERVE (config.py, bot_secrets.py, logs/, etc.) so local
+    settings and credentials survive untouched. Returns (success, message).
+    """
+    import requests
+    import zipfile
+    import tempfile
+
+    repo   = _github_repo_slug(cfg)
+    branch = getattr(cfg, "AUTO_UPDATE_BRANCH", "main")
+    url    = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+
+    try:
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+    except Exception as e:
+        return False, f"Download failed: {e}"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        zip_path = tmp_path / "update.zip"
+        zip_path.write_bytes(resp.content)
+
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp_path)
+        except Exception as e:
+            return False, f"Could not extract update archive: {e}"
+
+        # GitHub zipballs extract into a single top-level dir named
+        # "{repo-name}-{branch}" — find it rather than hardcoding it.
+        extracted_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
+        if not extracted_dirs:
+            return False, "Update archive was empty after extraction"
+        src_root = extracted_dirs[0]
+
+        try:
+            for item in src_root.iterdir():
+                if item.name in _ZIP_UPDATE_PRESERVE:
+                    continue
+                dest = repo_dir / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dest)
+        except Exception as e:
+            return False, f"Update downloaded but copying files failed: {e}"
+
+    return True, "Updated successfully"
 
 
 def _mark_graceful_update(reason: str):
@@ -172,10 +298,26 @@ def perform_update(cfg, repo_dir: Path = None, tg_send_fn=None) -> bool:
     remote   = getattr(cfg, "AUTO_UPDATE_REMOTE", "origin")
     branch   = getattr(cfg, "AUTO_UPDATE_BRANCH", "main")
 
+    if not is_git_repo(repo_dir):
+        ok, out = perform_update_zip(cfg, repo_dir)
+        if not ok:
+            log.error(f"[UPDATE] zip update failed: {out}")
+            if tg_send_fn:
+                tg_send_fn(
+                    f"❌ <b>Auto-Update Failed</b>\n━━━━━━━━━━━━━━━━\n"
+                    f"{out}\n\nBot continues running on the current version."
+                )
+            return False
+        log.info(f"[UPDATE] zip update applied: {out}")
+        _mark_graceful_update(f"Updated via auto-updater (zip): {out}")
+        if tg_send_fn:
+            _notify_update_applied(tg_send_fn, remote, branch)
+        return True
+
     if has_local_changes(repo_dir):
         msg = ("⚠️ <b>Auto-Update Skipped</b>\n━━━━━━━━━━━━━━━━\n"
                "An update is available, but this machine has uncommitted "
-               "local changes to tracked files (e.g. a hand-edited config.py). "
+               "local changes to a tracked file other than config.py. "
                "Pulling now risks losing those edits or hitting a merge conflict.\n\n"
                "Commit or stash your local changes, then the next check will "
                "pull normally.")
@@ -183,6 +325,12 @@ def perform_update(cfg, repo_dir: Path = None, tg_send_fn=None) -> bool:
         if tg_send_fn:
             tg_send_fn(msg)
         return False
+
+    # config.py is tracked but GUI-written (see has_local_changes' docstring)
+    # — back it up and restore it after the pull so a user's exchange/AI/bot
+    # settings survive regardless of what changed in config.py upstream.
+    config_path   = repo_dir / "config.py"
+    config_backup = config_path.read_text() if config_path.exists() else None
 
     ok, out = _run_git(["pull", remote, branch], repo_dir)
     if not ok:
@@ -195,24 +343,31 @@ def perform_update(cfg, repo_dir: Path = None, tg_send_fn=None) -> bool:
             )
         return False
 
+    if config_backup is not None:
+        config_path.write_text(config_backup)
+
     log.info(f"[UPDATE] Pulled successfully: {out}")
     _mark_graceful_update(f"Updated via auto-updater: {out[:200]}")
 
     if tg_send_fn:
-        try:
-            from version import __version__ as new_version
-        except Exception:
-            new_version = "unknown"
-        tg_send_fn(
-            f"⬆️ <b>Auto-Update Applied</b>\n━━━━━━━━━━━━━━━━\n"
-            f"Pulled the latest version from {remote}/{branch}.\n"
-            f"New version: <b>v{new_version}</b>\n\n"
-            f"Restarting now to load the new code — the watchdog will bring "
-            f"it back up automatically. You may see a brief 'unhealthy' "
-            f"alert during the restart window; that's expected.\n"
-            f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        _notify_update_applied(tg_send_fn, remote, branch)
     return True
+
+
+def _notify_update_applied(tg_send_fn, remote: str, branch: str):
+    try:
+        from version import __version__ as new_version
+    except Exception:
+        new_version = "unknown"
+    tg_send_fn(
+        f"⬆️ <b>Auto-Update Applied</b>\n━━━━━━━━━━━━━━━━\n"
+        f"Pulled the latest version from {remote}/{branch}.\n"
+        f"New version: <b>v{new_version}</b>\n\n"
+        f"Restarting now to load the new code — the watchdog will bring "
+        f"it back up automatically. You may see a brief 'unhealthy' "
+        f"alert during the restart window; that's expected.\n"
+        f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
 
 def update_check_worker(cfg, stop_event, tg_send_fn=None):

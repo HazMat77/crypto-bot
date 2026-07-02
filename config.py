@@ -572,6 +572,14 @@ AUTO_UPDATE_CHECK_INTERVAL_SECS = 3600    # check once per hour
 AUTO_UPDATE_REMOTE              = "origin"
 AUTO_UPDATE_BRANCH              = "main"
 
+# Used ONLY as a fallback for installs that aren't a git clone (a plain
+# .zip download extracted by hand — the most common install method for
+# non-technical users on Windows). When there's no git remote to check,
+# auto_updater.py compares version.py against this repo's raw file on
+# GitHub instead, and downloads a fresh zip to update. Git installs never
+# touch this setting.
+AUTO_UPDATE_GITHUB_REPO = "HazMat77/crypto-bot"
+
 # What happens when an update IS found. Three options:
 #
 #   "notify_only" (DEFAULT — recommended for everyone, including multi-user

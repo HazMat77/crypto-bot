@@ -35,9 +35,11 @@ fi
 # ── Check dependencies ───────────────────────────────────────────────────────
 if ! $PYTHON_CMD -c "import kucoin, pandas, numpy, requests, bs4, websocket" >/dev/null 2>&1; then
     echo "  Dependencies not found. Installing now from requirements.txt..."
+    echo "  This can take a few minutes on first run — please wait, do not"
+    echo "  close this window even if it looks idle for a while."
     echo ""
-    $PYTHON_CMD -m pip install -r requirements.txt --quiet 2>/dev/null \
-        || $PYTHON_CMD -m pip install -r requirements.txt --quiet --break-system-packages
+    $PYTHON_CMD -m pip install -r requirements.txt \
+        || $PYTHON_CMD -m pip install -r requirements.txt --break-system-packages
     echo ""
 fi
 
