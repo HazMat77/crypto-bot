@@ -330,7 +330,7 @@ def perform_update(cfg, repo_dir: Path = None, tg_send_fn=None) -> bool:
     # — back it up and restore it after the pull so a user's exchange/AI/bot
     # settings survive regardless of what changed in config.py upstream.
     config_path   = repo_dir / "config.py"
-    config_backup = config_path.read_text() if config_path.exists() else None
+    config_backup = config_path.read_text(encoding="utf-8", errors="replace") if config_path.exists() else None
 
     ok, out = _run_git(["pull", remote, branch], repo_dir)
     if not ok:
@@ -344,7 +344,7 @@ def perform_update(cfg, repo_dir: Path = None, tg_send_fn=None) -> bool:
         return False
 
     if config_backup is not None:
-        config_path.write_text(config_backup)
+        config_path.write_text(config_backup, encoding="utf-8")
 
     log.info(f"[UPDATE] Pulled successfully: {out}")
     _mark_graceful_update(f"Updated via auto-updater: {out[:200]}")
