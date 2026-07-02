@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-#  CryptoTradingBot — Configuration
+#  HazMat Crypto Bot — Configuration
 #  
 #  !! SECURITY REMINDER !!
 #  Never share this file or paste these keys into any chat, email, or forum.
@@ -79,8 +79,8 @@ SCALING_TIERS = [
     #   $5,000+        : 50 coins
 ]
 
-MIN_TRADE_USDT = 10.0
-TRADE_PCT      = 0.95
+MIN_TRADE_USDT = 8.0
+TRADE_PCT      = 0.92
 
 # ── Coin discovery filters ─────────────────────────────────────────────────
 MIN_VOLUME_USDT  = 100_000
@@ -161,9 +161,9 @@ MAX_HOLD_HOURS    = 48      # sell after 48 hours regardless of price
 # automatically as the pool climbs back up. Emergency-level recovery is
 # intentionally NOT automatic — that's the one tier that always needs a
 # human to look at what happened before trading resumes.
-DRAWDOWN_CAUTION_PCT   = 0.10   # 10% drop — half-size positions
-DRAWDOWN_PAUSE_PCT     = 0.15   # 15% drop — pause new buys
-DRAWDOWN_EMERGENCY_PCT = 0.25   # 25% drop — close everything, full stop
+DRAWDOWN_CAUTION_PCT   = 0.08   # 8% drop — half-size positions
+DRAWDOWN_PAUSE_PCT     = 0.14   # 14% drop — pause new buys
+DRAWDOWN_EMERGENCY_PCT = 0.22   # 22% drop — close everything, full stop
                                  # Set DRAWDOWN_EMERGENCY_PCT to 0 to disable
                                  # the emergency tier entirely (not recommended)
 
@@ -197,24 +197,40 @@ EXCHANGES = {
         "api_key":    _secrets.KUCOIN_API_KEY,
         "api_secret": _secrets.KUCOIN_API_SECRET,
         "passphrase": _secrets.KUCOIN_PASSPHRASE,
+        "futures_enabled": True,   # also requires FUTURES_ENABLED=True above (it is)
+        "staking_enabled": True,   # also requires STAKING_ENABLED=True above (it is)
     },
 
     "binance": {
         "enabled":    False,
         "api_key":    _secrets.BINANCE_API_KEY,
         "api_secret": _secrets.BINANCE_API_SECRET,
+        "futures_enabled": True,
+        "staking_enabled": True,
     },
 
     "kraken": {
         "enabled":    True,
         "api_key":    _secrets.KRAKEN_API_KEY,
         "api_secret": _secrets.KRAKEN_API_SECRET,
+        "futures_enabled": True,   # Kraken Futures is a SEPARATE product — needs
+                                     # futures_api_key/futures_api_secret below (from
+                                     # futures.kraken.com), NOT the spot keys above.
+                                     # Blank below = exchanges.py's futures_supported()
+                                     # correctly reports unsupported until you fill
+                                     # them in, even with this flag True — no live
+                                     # calls fire on empty credentials.
+        "futures_api_key":    getattr(_secrets, "KRAKEN_FUTURES_API_KEY",    ""),
+        "futures_api_secret": getattr(_secrets, "KRAKEN_FUTURES_API_SECRET", ""),
+        "staking_enabled": True,   # Kraken Earn uses the same spot keys above — no extra setup
     },
 
     "bybit": {
         "enabled":    False,
         "api_key":    _secrets.BYBIT_API_KEY,
         "api_secret": _secrets.BYBIT_API_SECRET,
+        "futures_enabled": True,
+        "staking_enabled": True,
     },
 
     "okx": {
@@ -222,18 +238,27 @@ EXCHANGES = {
         "api_key":    _secrets.OKX_API_KEY,
         "api_secret": _secrets.OKX_API_SECRET,
         "passphrase": _secrets.OKX_PASSPHRASE,
+        "futures_enabled": True,
+        "staking_enabled": True,
     },
 
     "gateio": {
         "enabled":    False,
         "api_key":    _secrets.GATEIO_API_KEY,
         "api_secret": _secrets.GATEIO_API_SECRET,
+        "futures_enabled": True,
+        "staking_enabled": True,
     },
 
     "mexc": {
         "enabled":    False,
         "api_key":    _secrets.MEXC_API_KEY,
         "api_secret": _secrets.MEXC_API_SECRET,
+        "futures_enabled": True,   # CAUTION — see exchanges.py MEXCExchange futures
+                                     # comment block before enabling with real funds
+        "staking_enabled": False,   # not offered — MEXC has no documented Earn API (see exchanges.py),
+                                     # leaving this True would do nothing anyway since
+                                     # staking_supported() defaults to False for MEXC
     },
 
     "webull": {
@@ -332,11 +357,76 @@ AI_CONFIDENCE_MIN = 70
 # If trades are rarely firing, lower this first before touching RSI thresholds.
 ENGINE_CONFIDENCE_MIN = 55
 
+# ── Multi-timeframe confirmation ────────────────────────────────────────────
+# Checks the 1h RSI isn't at a directional extreme (outside 30-70) that
+# would contradict a 15m BUY signal — catches the case where 15m looks
+# oversold but the coin is actually mid-way through a much bigger 1h
+# downtrend. Fails OPEN on any data/network error (never blocks a trade
+# just because the extra API call had a bad moment).
+MULTI_TIMEFRAME_CONFIRMATION_ENABLED = True   # runs the check, affects confidence score
+MULTI_TIMEFRAME_REQUIRED             = False  # True = hard veto on conflict, not just a
+                                               # confidence penalty. Off by default since
+                                               # this is a NEW filter — watch /engine for a
+                                               # while first to see how often it would fire
+                                               # before making it a hard blocker.
+
 # ── Also supports Grok (xAI) as an alternative AI provider ────────────────
 # Set AI_PROVIDER = "grok" and fill in GROK_API_KEY to use Grok instead.
 # See README_WINDOWS.txt for how to get a Grok API key.
 AI_PROVIDER   = "claude"   # "claude" | "grok"
 GROK_API_KEY  = _secrets.GROK_API_KEY
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HYBRID AI — fake AI as the default router, real AI only where it earns its cost
+#
+#  OFF by default (AI_HYBRID_MODE=False) — live mode keeps calling real AI on
+#  every signal exactly as before until you opt in. Paper mode is UNCHANGED
+#  either way: it always uses fake AI, hybrid or not (see ai_analyst.py).
+#
+#  When AI_HYBRID_MODE=True in LIVE mode: fake AI (local, free, instant)
+#  evaluates every signal first. Only some of those get escalated to a real
+#  Claude/Grok call — specifically the ones worth paying for: a random
+#  sample (AI_REAL_USAGE_RATE), anything fake AI is already confident about
+#  (AI_MIN_CONFIDENCE_FOR_REAL), and anything fake AI is unsure about
+#  ("HOLD" — the borderline cases most worth a second, better opinion).
+#  Real AI's verdict always wins when escalated; fake AI's verdict is used
+#  as-is otherwise. Typical result: 80-90%+ fewer real API calls than
+#  calling real AI on every single signal, for a similar-quality decision
+#  on the signals that actually mattered.
+# ══════════════════════════════════════════════════════════════════════════════
+
+AI_HYBRID_MODE             = True
+AI_REAL_USAGE_RATE         = 0.12    # conservative — controls real API cost
+AI_MIN_CONFIDENCE_FOR_REAL = 60      # fake AI confidence >= this always escalates to real AI
+AI_REAL_CALL_COOLDOWN_SECS = 3600    # don't spend 2 real calls on the same coin within this window,
+                                      # even if it keeps re-triggering escalation on a fast poll loop
+
+# Force fake AI even in LIVE mode, ignoring AI_HYBRID_MODE entirely — useful
+# for cost control, or for dry-running real-money position sizing/risk logic
+# without spending on API calls while you're still validating the setup.
+LIVE_FAKE_AI_ONLY = False   # flip True during high-volatility periods for cost control
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HYBRID ALLOCATOR — spot / futures vs staking, "is this trade worth it?"
+#
+#  Before the bot takes a spot buy or opens a futures short, it checks
+#  whether that trade's own expected return (from real trade history once
+#  there's enough of it — see strategy_engine.PerformanceTracker.expectancy_pct
+#  — falling back to an assumed 55% win rate before that) beats what the
+#  same capital would earn just sitting in this exchange's flexible
+#  staking product over a comparable hold time. If staking wins, the
+#  trade is skipped and the capital is left for staking_manager.py's
+#  normal idle-capital sweep to pick up instead.
+#
+#  Safe to leave ON by default: with STAKING_ENABLED=False (the default),
+#  there's no staking yield to compare against, so this never rejects a
+#  trade it wouldn't have rejected anyway — it only starts actually
+#  changing behaviour once you've ALSO turned staking on.
+# ══════════════════════════════════════════════════════════════════════════════
+
+HYBRID_OPTIMIZER_ENABLED     = True
+HYBRID_MIN_EDGE_OVER_STAKING = 0.008   # require a trade's edge to beat staking by at least
+                                      # this many extra percentage points (0 = just beat it)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  AUTO-CONVERT (15th and 30th of each month)
@@ -387,7 +477,7 @@ LISTING_RESERVE_USDT   = 5.0    # keep $5 protected for new listings always
 # OFF by default (0.0) so existing setups aren't silently changed by this
 # update. Recommended range if you enable it: 0.30-0.50 (keep 30-50% of
 # starting capital completely untouchable).
-CAPITAL_FLOOR_PCT      = 0.0    # e.g. 0.30 = bottom 30% of starting capital
+CAPITAL_FLOOR_PCT      = 0.20   # 20% of starting capital
                                   # is NEVER deployed, no matter what
 
 # ── News-based coin selection ──────────────────────────────────────────────
@@ -406,7 +496,14 @@ NEWS_COIN_RANKING = True
 # False = plain top-N ranking, no correlation check (faster, original behaviour)
 # Adds a small delay during coin discovery/re-rank (fetches price history
 # per candidate) — disable if discovery cycles feel slow on a weak connection.
-CORRELATION_AWARE_SELECTION = False
+CORRELATION_AWARE_SELECTION = True
+
+# Correlation threshold used above — a candidate correlated at or above
+# this value with a coin already selected gets skipped in favour of the
+# next-best alternative. Lower = stricter diversification (more coins
+# rejected), higher = more permissive. Only has any effect when
+# CORRELATION_AWARE_SELECTION is True.
+CORRELATION_CAP = 0.78
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MONTHLY AI STRATEGY SELF-IMPROVEMENT
@@ -559,3 +656,82 @@ AGGRESSIVE_TAKE_PROFIT = 0.25   # 25% — matches global target
 AGGRESSIVE_TRAILING_STOP = 0.04 # 4% trailing
 AGGRESSIVE_MAX_HOLD_HOURS = 24  # shorter hold — take profits faster
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  FUTURES TRADING — perpetual swaps, LEVERAGE HARD-CAPPED AT 1x
+#
+#  OFF by default. This lets the bot go SHORT — something spot trading can
+#  never do — as the mirror image of the existing RSI+MA mean-reversion
+#  logic: spot buys an oversold coin in an uptrend, futures shorts an
+#  overbought coin in a downtrend. It does NOT add leveraged position
+#  sizing. MAX_LEVERAGE is enforced in futures_manager.py and in every
+#  exchange adapter's open_futures_long()/open_futures_short() — at 1x,
+#  a futures position's maximum loss is bounded the same way a spot
+#  position's is (the position can still be forced to close at a loss on
+#  a large adverse move, but it can't be wiped out faster than the
+#  capital behind it, the way a leveraged position can).
+#
+#  Requires the exchange adapter to implement futures_supported() == True.
+#  See exchanges.py — Binance/Bybit/OKX/KuCoin/Gate.io/Kraken/MEXC support
+#  futures; Webull/VirgoCX/Coinbase do not (no such product on those
+#  platforms) and are silently skipped even if enabled here.
+# ══════════════════════════════════════════════════════════════════════════════
+
+FUTURES_ENABLED       = True
+MAX_LEVERAGE          = 1       # HARD CAP — do not raise. 1x only, enforced in code.
+FUTURES_MARGIN_MODE   = "isolated"   # isolated margin only — a bad futures trade
+                                       # can never threaten balance outside that position
+
+# Futures positions are sized as a % of the SAME pool spot trading uses —
+# there is one pool per exchange, not a separate futures pool, so a short
+# and a long can never together risk more than FUTURES_MAX_PER_TRADE_PCT
+# beyond what spot's own sizing already governs.
+FUTURES_MAX_PER_TRADE_PCT = 0.08   # max 8% of pool per futures position
+
+# Shorts exist here to profit from/hedge against a downtrend, not to be a
+# second aggressive strategy — kept tighter than spot's default TP/SL.
+FUTURES_TAKE_PROFIT_PCT = 0.045   # close short/long at +4.5%
+FUTURES_STOP_LOSS_PCT   = 0.035   # close short/long at -3.5% (measured like spot: from peak favourable move)
+FUTURES_MAX_HOLD_HOURS  = 36     # force-close stale futures positions after 36h
+
+# Funding rate guard — perpetuals charge/pay funding periodically. A short
+# in a strongly bullish market can bleed funding payments even while
+# "right" on direction. Refuse to open a position if the funding rate
+# would work against it beyond this threshold (fraction, e.g. 0.001 = 0.1%
+# per funding interval).
+FUTURES_MAX_ADVERSE_FUNDING_RATE = 0.0008   # magnitude, not signed — see comment above
+
+# Which exchanges the bot is allowed to open futures positions on. An
+# exchange must ALSO have "futures_enabled": True in its EXCHANGES entry
+# below (defence in depth — two separate opt-ins before real orders fire).
+FUTURES_SUPPORTED_EXCHANGES = {"binance", "bybit", "okx", "kucoin", "gateio", "kraken", "mexc"}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  STAKING — parks idle pool capital in exchange flexible-earn products
+#
+#  OFF by default. When enabled, staking_manager.py periodically checks
+#  each exchange's idle USDT (capital not currently deployed in an open
+#  spot or futures position) and moves it into that exchange's flexible
+#  ("no lockup") earn product whenever the APR beats STAKING_MIN_APR —
+#  earning yield on cash that would otherwise sit doing nothing between
+#  signals. It automatically unstakes (redeems) whenever place_buy() or
+#  a futures open needs more spendable balance than what's currently
+#  liquid. FIXED-TERM / locked staking products are never used — only
+#  flexible products, specifically so capital is never unavailable when
+#  a trade signal wants it.
+# ══════════════════════════════════════════════════════════════════════════════
+
+STAKING_ENABLED             = True
+STAKING_MIN_APR             = 0.025    # only stake if flexible APR >= 2.5%
+STAKING_IDLE_THRESHOLD_USDT = 20.0    # don't bother staking small dust amounts
+STAKING_CHECK_INTERVAL_SECS = 1800    # re-check idle balances every 30 min
+STAKING_MAX_ALLOCATION_PCT  = 0.70    # never stake more than 70% of pool —
+                                       # the rest stays liquid for trade signals
+                                       # even if idle right now
+STAKING_COINS                = ["USDT"]   # which idle balances are eligible to stake
+
+# Which exchanges the bot is allowed to stake on. Must ALSO have
+# "staking_enabled": True in that exchange's EXCHANGES entry below.
+STAKING_SUPPORTED_EXCHANGES = {"binance", "bybit", "okx", "kucoin", "gateio", "kraken"}
+
+
+# Auto-adapted to SIDEWAYS regime (2026-07-02 06:00)

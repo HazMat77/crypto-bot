@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════════════
-#  CryptoTradingBot Watchdog — Linux Launcher
+#  HazMat Crypto Bot Watchdog — Linux Launcher
 #
 #  Runs SEPARATELY from the bot itself. Keep this running alongside the
 #  bot. It checks every 60 seconds whether the bot is still alive and

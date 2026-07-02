@@ -1,0 +1,15 @@
+# Avoids a real bug: this repo has its own watchdog.py (the bot's health
+# monitor process), which shadows the pip "watchdog" package Streamlit's
+# default file-watcher needs (`from watchdog import events`) — since the
+# script's own directory is on sys.path ahead of site-packages, our
+# watchdog.py wins the import and Streamlit's session setup crashes with
+# "cannot import name 'events' from 'watchdog'" the instant a browser
+# connects. Setting fileWatcherType = "none" means Streamlit never tries
+# that import, sidestepping the collision. This only disables
+# auto-reload-on-file-change (not needed for this dashboard); it doesn't
+# affect any dashboard functionality.
+[server]
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false

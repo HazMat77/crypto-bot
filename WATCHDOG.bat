@@ -1,9 +1,9 @@
 @echo off
-title CryptoTradingBot Watchdog
+title HazMat Crypto Bot Watchdog
 color 0E
 echo.
 echo  =============================================
-echo   CryptoTradingBot Watchdog - Health Monitor
+echo   HazMat Crypto Bot Watchdog - Health Monitor
 echo  =============================================
 echo.
 echo  This runs SEPARATELY from the bot itself.

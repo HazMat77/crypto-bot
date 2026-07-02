@@ -1,5 +1,5 @@
 """
-CryptoTradingBot — Multi-Exchange Multi-Coin RSI + MA Trading Bot
+HazMat Crypto Bot — Multi-Exchange Multi-Coin RSI + MA Trading Bot
 ====================================================================
 - Auto-discovers all coins on each exchange
 - Dynamically scales trade size and coin count based on pool size
@@ -12,10 +12,14 @@ import logging
 import os
 import sys
 import argparse
-import requests
 import threading
 from datetime import datetime, timedelta
 from collections import defaultdict
+
+import bootstrap
+bootstrap.ensure_installed()
+
+import requests
 import pandas as pd
 import config
 import ai_analyst
@@ -25,7 +29,8 @@ from deposit_monitor import DepositMonitor, AutoConverter
 from price_feed import get_price_cached, price_updater_worker
 from risk_manager import (check_position, check_drawdown, is_paused,
                           on_buy, on_sell, calc_atr, volatility_adjusted_size,
-                          tg_risk_exit, get_size_multiplier)
+                          tg_risk_exit, get_size_multiplier, get_entry_time)
+from trade_ledger import record_trade
 from listing_hunter import NewListingHunter
 from telegram_commands import TelegramCommandHandler
 from strategy_optimizer import StrategyOptimizer
@@ -33,6 +38,10 @@ from strategy_engine import evaluate_signal, record_trade_outcome, get_tracker
 from adaptive_intelligence import AdaptiveIntelligence, set_intelligence
 from market_study import MarketStudy
 import approval_gate as approval_gate_module
+from futures_manager import (manage_open_short, evaluate_and_open_short,
+                             has_open_short, close_all_shorts)
+from staking_manager import staking_worker, ensure_liquid
+from hybrid_allocator import evaluate_hybrid_gate
 
 # ── Parse --mode ───────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
@@ -492,6 +501,19 @@ def place_buy(ex_name, exchange, symbol, price, mode, pool_type: str = "normal",
 
     if not config.PAPER_TRADING:
         try:
+            # If some of this exchange's idle USDT is parked in flexible
+            # staking, redeem whatever's needed to cover this buy BEFORE
+            # placing it — otherwise a real order could fail on
+            # insufficient balance even though the pool total (staked +
+            # liquid) was enough. If redemption can't actually cover the
+            # trade, don't place the order at all — bail out cleanly
+            # instead of sending a market order likely to be rejected for
+            # insufficient balance.
+            if not ensure_liquid(ex_name, exchange, "USDT", usdt_amt, config, mode):
+                log.error(f"[{ex_name.upper()}:{coin}] Buy aborted — could not free enough "
+                         f"liquid USDT (some may still be in staking)")
+                tg_error(ex_name, symbol, "Buy aborted — insufficient liquid balance even after unstaking")
+                return False
             exchange.place_market_buy(symbol, usdt_amt)
             with pool_locks[ex_name]:
                 coin_in_position[ex_name][symbol] = True
@@ -522,6 +544,10 @@ def place_sell(ex_name, exchange, symbol, price, mode):
         pnl_net   = round(pnl_gross - fees, 8)
         pnl_pct   = (pnl_gross / buy_spent * 100) if buy_spent > 0 else 0
 
+        # Read BEFORE on_sell() clears it — the durable ledger (for tax
+        # export) needs the acquisition date, not just the exit date.
+        entry_time = get_entry_time(ex_name, symbol)
+
         with pool_locks[ex_name]:
             pool_usdt[ex_name]               += proceeds
             coin_holdings[ex_name][symbol]    = 0.0
@@ -529,6 +555,16 @@ def place_sell(ex_name, exchange, symbol, price, mode):
 
         # Clear risk tracking
         on_sell(ex_name, symbol)
+
+        record_trade({
+            "exchange": ex_name, "coin": coin, "symbol": symbol, "side": "spot_long",
+            "entry_time": entry_time.isoformat() if entry_time else None,
+            "exit_time": datetime.now().isoformat(),
+            "buy_price": buy_price, "sell_price": price, "qty": qty,
+            "spent": buy_spent, "proceeds": proceeds,
+            "pnl_gross": pnl_gross, "fees": fees, "pnl_net": pnl_net,
+            "mode": mode,
+        })
 
         with stats_lock:
             trade_count += 1
@@ -581,8 +617,10 @@ def place_sell(ex_name, exchange, symbol, price, mode):
                 fees      = round((buy_spent + proceeds) * fee_rate, 6)
                 pnl_net   = round(pnl_gross - fees, 6)
                 pnl_pct   = (pnl_gross / buy_spent * 100) if buy_spent > 0 else 0
+                entry_time = get_entry_time(ex_name, symbol)
                 with pool_locks[ex_name]:
                     coin_in_position[ex_name][symbol] = False
+                on_sell(ex_name, symbol)
                 with stats_lock:
                     trade_count += 1; total_pnl += pnl_net; total_fees += fees
                 with daily_lock:
@@ -593,6 +631,15 @@ def place_sell(ex_name, exchange, symbol, price, mode):
                         "pnl_gross": pnl_gross, "fees": fees, "pnl_net": pnl_net,
                         "time": datetime.now().strftime("%H:%M:%S"),
                     })
+                record_trade({
+                    "exchange": ex_name, "coin": coin, "symbol": symbol, "side": "spot_long",
+                    "entry_time": entry_time.isoformat() if entry_time else None,
+                    "exit_time": datetime.now().isoformat(),
+                    "buy_price": coin_buy_price[ex_name][symbol], "sell_price": price, "qty": qty,
+                    "spent": buy_spent, "proceeds": proceeds,
+                    "pnl_gross": pnl_gross, "fees": fees, "pnl_net": pnl_net,
+                    "mode": mode,
+                })
                 sign = "+" if pnl_net >= 0 else ""
                 log.info(f"[{ex_name.upper()}:{coin}] 🔴 SELL Net {sign}${pnl_net:.4f}")
                 tg_sell(ex_name, symbol, qty, price, proceeds, coin_buy_price[ex_name][symbol],
@@ -704,6 +751,14 @@ def _trigger_emergency_close_all(ex_name: str, mode: str):
             except Exception as e:
                 failed.append(f"{symbol}: {e}")
                 log.error(f"[{ex_name.upper()}] Emergency close failed for {symbol}: {e}")
+
+    # Same emergency also closes any open futures short on this exchange —
+    # a drawdown severe enough to trigger this circuit breaker means every
+    # open position (spot or futures) should come off, not just spot.
+    try:
+        close_all_shorts({ex_name: EXCHANGES[ex_name]}, mode, config)
+    except Exception as e:
+        log.error(f"[{ex_name.upper()}] Emergency futures close failed: {e}")
 
     # Engage the same manual pause used by /pause — requires explicit /resume
     manual_pause.set()
@@ -999,18 +1054,32 @@ def coin_worker(ex_name, exchange, symbol, mode, stop_event):
                                       ai_result["reason"],
                                       news_sent)
                         else:
-                            if ai_result:
-                                tg_ai_approve(ex_name, symbol, "BUY",
-                                             ai_result["confidence"],
-                                             ai_result["reason"], news_sent)
-                            strategy_label = {"breakout": "breakout", "dip_buy": "dip-buy"}.get(active_strategy, "mean-rev")
-                            log.info(f"[{tag}] {pool_label} 🟢 BUY "
-                                    f"({strategy_label}) "
-                                    f"TP={engine_result['take_profit']:.1%} "
-                                    f"SL={_cfg.STOP_LOSS_PCT:.1%} "
-                                    f"pos=${engine_result['position_size']:.2f}")
-                            place_buy(ex_name, exchange, symbol, price, mode,
-                                     pool_type=pool_type, strategy_type=active_strategy)
+                            # ── Hybrid gate: is this trade actually a better use
+                            # of this capital than just staking it? See
+                            # hybrid_allocator.py. A no-op unless both
+                            # HYBRID_OPTIMIZER_ENABLED and STAKING_ENABLED are on.
+                            hybrid = evaluate_hybrid_gate(
+                                ex_name, exchange, symbol, "spot_long",
+                                engine_result["take_profit"], _cfg.STOP_LOSS_PCT,
+                                getattr(config, "MAX_HOLD_HOURS", 48) or 24,
+                                mode, config,
+                            )
+                            if not hybrid["proceed"]:
+                                log.info(f"[{tag}] {pool_label} ⛔ Hybrid gate — staking "
+                                        f"beats this trade's edge: {hybrid['reason']}")
+                            else:
+                                if ai_result:
+                                    tg_ai_approve(ex_name, symbol, "BUY",
+                                                 ai_result["confidence"],
+                                                 ai_result["reason"], news_sent)
+                                strategy_label = {"breakout": "breakout", "dip_buy": "dip-buy"}.get(active_strategy, "mean-rev")
+                                log.info(f"[{tag}] {pool_label} 🟢 BUY "
+                                        f"({strategy_label}) "
+                                        f"TP={engine_result['take_profit']:.1%} "
+                                        f"SL={_cfg.STOP_LOSS_PCT:.1%} "
+                                        f"pos=${engine_result['position_size']:.2f}")
+                                place_buy(ex_name, exchange, symbol, price, mode,
+                                         pool_type=pool_type, strategy_type=active_strategy)
                     else:
                         log.info(f"[{tag}] {pool_label} ⛔ Engine filtered: "
                                 f"{engine_result['filters_failed']}")
@@ -1104,6 +1173,24 @@ def coin_worker(ex_name, exchange, symbol, mode, stop_event):
                         place_sell(ex_name, exchange, symbol, price, mode)
                 else:
                     log.info(f"[{tag}] {pool_label} ⏸  Holding")
+
+            # ── FUTURES SHORT — independent of the spot BUY/SELL logic
+            # above (see futures_manager.py). Always manages any already-
+            # open short first (TP/SL/max-hold/signal-flip); only
+            # considers opening a NEW short when spot isn't already long
+            # this coin, using the exact same bearish RSI+MA read that
+            # would trigger a spot SELL — spot and futures never take
+            # opposing bets on the same coin at the same time. No-ops
+            # instantly (no network calls) on any exchange/coin this
+            # isn't enabled for.
+            try:
+                manage_open_short(ex_name, exchange, symbol, price, rsi, ma, mode, config)
+                if not holding and not has_open_short(ex_name, symbol):
+                    if rsi > params["rsi_sell"] and price < ma:
+                        evaluate_and_open_short(ex_name, exchange, symbol, price, rsi, ma,
+                                                pool_usdt[ex_name], mode, config)
+            except Exception as e:
+                log.debug(f"[{tag}] Futures step skipped: {e}")
 
         except Exception as e:
             err_str = str(e)
@@ -1506,6 +1593,22 @@ def run():
     threading.Thread(target=heartbeat_worker,    args=(mode, stop_event), daemon=True).start()
     threading.Thread(target=daily_report_worker, args=(mode, stop_event), daemon=True).start()
     threading.Thread(target=scaling_monitor,     args=(mode, stop_event), daemon=True).start()
+
+    if getattr(config, "STAKING_ENABLED", False):
+        threading.Thread(
+            target=staking_worker,
+            args=(EXCHANGES, pool_usdt, pool_locks, config, mode, stop_event),
+            daemon=True, name="staking_worker",
+        ).start()
+        log.info(f"  Staking        : ACTIVE — idle capital checked every "
+                f"{getattr(config, 'STAKING_CHECK_INTERVAL_SECS', 1800)}s "
+                f"(min APR {getattr(config, 'STAKING_MIN_APR', 0.03):.1%})")
+
+    if getattr(config, "FUTURES_ENABLED", False):
+        futures_exchanges = [ex for ex in EXCHANGES
+                             if ex in getattr(config, "FUTURES_SUPPORTED_EXCHANGES", set())
+                             and config.EXCHANGES.get(ex, {}).get("futures_enabled", False)]
+        log.info(f"  Futures        : ACTIVE (1x, shorts only) — {futures_exchanges or 'none opted in yet'}")
 
     if getattr(config, "AUTO_UPDATE_ENABLED", False):
         from auto_updater import update_check_worker

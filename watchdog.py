@@ -52,6 +52,9 @@ import platform
 from pathlib import Path
 from datetime import datetime, timedelta
 
+import bootstrap
+bootstrap.ensure_installed()
+
 # ── Logging — completely separate file from the bot's own log ─────────────
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)

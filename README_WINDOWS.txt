@@ -1,12 +1,12 @@
 ╔════════════════════════════════════════════════════════════════╗
-║                CryptoTradingBot — Windows Guide                ║
+║               HazMat Crypto Bot — Windows Guide                ║
 ╚════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   STEP 1 — INSTALL THE BOT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. Extract this zip to a folder on your PC (e.g. Desktop\CryptoTradingBot)
+1. Extract this zip to a folder on your PC (e.g. Desktop\HazMat Crypto Bot)
 2. Double-click INSTALL.bat
    - It installs Python automatically if not already on your PC
    - It installs all required packages

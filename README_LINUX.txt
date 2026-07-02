@@ -1,5 +1,5 @@
 ╔════════════════════════════════════════════════════════════════╗
-║              CryptoTradingBot — RSI + MA Strategy              ║
+║             HazMat Crypto Bot — RSI + MA Strategy              ║
 ║                    Linux Quick Start Guide                     ║
 ╚════════════════════════════════════════════════════════════════╝
 

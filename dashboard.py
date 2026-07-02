@@ -1,6 +1,6 @@
 """
-Bot Dashboard — Streamlit
-==========================
+HazMat Crypto Bot Dashboard — Streamlit
+==========================================
 Live monitoring dashboard for the trading bot.
 
 Run with:
@@ -20,12 +20,20 @@ Install Streamlit:
     pip install streamlit plotly
 """
 
+import os
 import sys
 import json
 import glob
-import pandas as pd
+import subprocess
 from pathlib import Path
 from datetime import datetime, date
+
+import bootstrap
+bootstrap.ensure_installed(optional=True)  # pandas, plotly (streamlit itself must
+                                            # already be present — it's what launched this file)
+
+import pandas as pd
+import settings_writer
 
 # ── Check Streamlit is installed ──────────────────────────────────────────
 try:
@@ -37,10 +45,73 @@ except ImportError:
     print("Then run: streamlit run dashboard.py")
     sys.exit(1)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BOT / WATCHDOG CONTROL
+#  This is what makes this page a full GUI on its own — it's the interface
+#  used on Android (via Termux), where CustomTkinter's gui_dashboard.py
+#  doesn't run. Every control here works identically on desktop and Android.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _pid_alive(pid):
+    if not pid:
+        return False
+    try:
+        if sys.platform == "win32":
+            result = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                                    capture_output=True, text=True, timeout=10)
+            return str(pid) in result.stdout
+        else:
+            os.kill(pid, 0)
+            return True
+    except (ProcessLookupError, PermissionError):
+        return False
+    except Exception:
+        return False
+
+
+def _bot_is_running():
+    try:
+        with open("logs/liveness.json") as f:
+            data = json.load(f)
+        last_ping = datetime.fromisoformat(data["last_ping"])
+        if (datetime.now() - last_ping).total_seconds() > 300:
+            return False
+        return _pid_alive(data.get("pid"))
+    except Exception:
+        return False
+
+
+def _launch_bot_and_watchdog(mode_str: str):
+    """Launches bot.py in the given mode and watchdog.py alongside it, as
+    detached background processes — same Popen pattern watchdog.py's own
+    auto-restart uses. Tracks PIDs in session_state so a second click
+    within this browser session doesn't stack up duplicate watchdogs."""
+    python_cmd    = sys.executable
+    bot_path      = str(Path("bot.py").resolve())
+    watchdog_path = str(Path("watchdog.py").resolve())
+
+    if sys.platform == "win32":
+        bot_proc = subprocess.Popen([python_cmd, bot_path, "--mode", mode_str],
+                                    creationflags=subprocess.CREATE_NEW_CONSOLE)
+    else:
+        bot_proc = subprocess.Popen([python_cmd, bot_path, "--mode", mode_str],
+                                    start_new_session=True)
+    st.session_state["bot_pid"] = bot_proc.pid
+
+    if not _pid_alive(st.session_state.get("watchdog_pid")):
+        if sys.platform == "win32":
+            wd_proc = subprocess.Popen([python_cmd, watchdog_path],
+                                       creationflags=subprocess.CREATE_NEW_CONSOLE)
+        else:
+            wd_proc = subprocess.Popen([python_cmd, watchdog_path],
+                                       start_new_session=True)
+        st.session_state["watchdog_pid"] = wd_proc.pid
+
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="CryptoTradingBot",
-    page_icon="🤖",
+    page_title="HazMat Crypto Bot",
+    page_icon="🔥",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -56,6 +127,13 @@ st.markdown("""
     .neg { color: #D85A30; font-weight: 600; }
     .neutral { color: #888780; }
     div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+    .fire-text {
+        background: linear-gradient(90deg, #7f0000, #e8451e, #ff9e00, #ffc300);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-weight: 800;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -148,7 +226,9 @@ def load_news_scores():
 #  SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.sidebar.title("🤖 Bot Dashboard")
+st.sidebar.markdown(
+    '<h1 style="margin-bottom:0;">🔥 <span class="fire-text">HazMat</span> Crypto Bot</h1>',
+    unsafe_allow_html=True)
 st.sidebar.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
 
 page = st.sidebar.radio("Navigation", [
@@ -170,6 +250,73 @@ st.sidebar.markdown(f"**Mode:** {mode_tag}")
 st.sidebar.markdown(f"**AI:** {'✅ ON' if cfg.get('AI_ENABLED') else '❌ OFF'}")
 st.sidebar.markdown(f"**Telegram:** {'✅' if cfg.get('TELEGRAM_ENABLED') else '❌'}")
 st.sidebar.markdown(f"**Listings:** {'✅' if cfg.get('LISTING_HUNTER') else '❌'}")
+
+# ── Bot control ────────────────────────────────────────────────────────────
+st.sidebar.divider()
+st.sidebar.subheader("Bot Control")
+
+bot_running = _bot_is_running()
+st.sidebar.caption(f"Status: {'🟢 Running' if bot_running else '⚪ Not running'}")
+
+if bot_running:
+    st.sidebar.button("🚀 Start", disabled=True, use_container_width=True,
+                      help="Already running — a recent liveness ping was found")
+else:
+    launch_mode = st.sidebar.radio("Launch mode", ["Paper", "Live"],
+                                   horizontal=True, key="launch_mode")
+    live_confirmed = True
+    if launch_mode == "Live":
+        live_confirmed = st.sidebar.checkbox(
+            "I understand this uses real funds", key="confirm_live")
+    if st.sidebar.button("🚀 Start Bot + Watchdog", use_container_width=True,
+                         disabled=not live_confirmed):
+        _launch_bot_and_watchdog(launch_mode.lower())
+        st.sidebar.success(f"Started in {launch_mode.upper()} mode.")
+        st.rerun()
+
+col_pause, col_resume = st.sidebar.columns(2)
+with col_pause:
+    if st.button("⏸ Pause", use_container_width=True):
+        Path(".bot_pause").touch()
+        st.sidebar.success("Paused — new buys stopped.")
+with col_resume:
+    if st.button("▶ Resume", use_container_width=True):
+        Path(".bot_pause").unlink(missing_ok=True)
+        st.sidebar.success("Resumed.")
+
+# ── Updates — reuses auto_updater.py, the same module bot.py's own
+# background checker and the desktop GUI's Updates button use. Works
+# identically on Android (Termux ships git).
+st.sidebar.divider()
+if st.sidebar.button("⬆️ Check for Updates", use_container_width=True):
+    try:
+        import auto_updater
+        import config as _cfg_mod
+        result = auto_updater.check_for_update(_cfg_mod)
+    except Exception as e:
+        result = {"update_available": False, "reason": f"Update check failed: {e}"}
+
+    if result.get("update_available"):
+        local  = (result.get("local_commit")  or "?")[:8]
+        remote = (result.get("remote_commit") or "?")[:8]
+        st.sidebar.warning(f"Update available: {local} → {remote}")
+        st.sidebar.caption("bot_secrets.py is gitignored — an update never touches it, "
+                           "nothing to re-enter afterward.")
+        if st.sidebar.button("⬆️ Pull Update Now", use_container_width=True):
+            try:
+                import config as _cfg_mod2
+                ok = auto_updater.perform_update(_cfg_mod2)
+            except Exception as e:
+                ok, err = False, str(e)
+            else:
+                err = None
+            if ok:
+                st.sidebar.success("Updated. Restart the bot and this dashboard to run the new version.")
+            else:
+                st.sidebar.error(err or "Update failed — see logs/watchdog.log for details.")
+    else:
+        reason = result.get("reason") or ""
+        st.sidebar.info("Up to date." if reason in ("", "Already up to date") else reason)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -528,19 +675,107 @@ elif page == "⚙️ Config":
             st.markdown(f"**Listing Hunter:** {'✅ Enabled' if cfg.get('LISTING_HUNTER') else '❌ Disabled'}")
 
         st.divider()
-        st.info("To change settings, edit **config.py** in Notepad and restart the bot.")
 
+        # ── Quick presets — actually applies them via settings_writer,
+        # same values as the desktop GUI's Conservative/Balanced/Aggressive
+        # buttons, rather than just showing the numbers to copy by hand.
         st.subheader("Quick Presets")
+        st.caption("Updates config.py. Restart the bot to apply.")
+        PRESETS = {
+            "Conservative": dict(NORMAL_RSI_BUY=35, NORMAL_RSI_SELL=65,
+                                 NORMAL_STOP_LOSS=0.05, NORMAL_TAKE_PROFIT=0.05,
+                                 AGGRESSIVE_RSI_BUY=40, AGGRESSIVE_RSI_SELL=60,
+                                 AGGRESSIVE_STOP_LOSS=0.07, AGGRESSIVE_TAKE_PROFIT=0.07),
+            "Balanced": dict(NORMAL_RSI_BUY=35, NORMAL_RSI_SELL=65,
+                             NORMAL_STOP_LOSS=0.06, NORMAL_TAKE_PROFIT=0.04,
+                             AGGRESSIVE_RSI_BUY=42, AGGRESSIVE_RSI_SELL=58,
+                             AGGRESSIVE_STOP_LOSS=0.08, AGGRESSIVE_TAKE_PROFIT=0.08),
+            "Aggressive": dict(NORMAL_RSI_BUY=38, NORMAL_RSI_SELL=62,
+                               NORMAL_STOP_LOSS=0.08, NORMAL_TAKE_PROFIT=0.06,
+                               AGGRESSIVE_RSI_BUY=45, AGGRESSIVE_RSI_SELL=55,
+                               AGGRESSIVE_STOP_LOSS=0.10, AGGRESSIVE_TAKE_PROFIT=0.10),
+        }
         col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            st.markdown("**Conservative (live)**")
-            st.code("RSI_BUY  = 35\nRSI_SELL = 65\nSTOP_LOSS_PCT = 0.05\nTAKE_PROFIT_PCT = 0.03")
-        with col_b:
-            st.markdown("**Balanced (recommended)**")
-            st.code("RSI_BUY  = 38\nRSI_SELL = 62\nSTOP_LOSS_PCT = 0.06\nTAKE_PROFIT_PCT = 0.04")
-        with col_c:
-            st.markdown("**Aggressive (testing)**")
-            st.code("RSI_BUY  = 45\nRSI_SELL = 55\nSTOP_LOSS_PCT = 0.08\nTAKE_PROFIT_PCT = 0.06")
+        for col, name in zip((col_a, col_b, col_c), PRESETS):
+            with col:
+                st.markdown(f"**{name}**")
+                p = PRESETS[name]
+                st.caption(f"Normal RSI {p['NORMAL_RSI_BUY']}/{p['NORMAL_RSI_SELL']}  "
+                          f"SL {p['NORMAL_STOP_LOSS']*100:.0f}%  TP {p['NORMAL_TAKE_PROFIT']*100:.0f}%")
+                if st.button(f"Apply {name}", key=f"preset_{name}", use_container_width=True):
+                    settings_writer.write_config_values(p)
+                    st.cache_data.clear()
+                    st.success(f"{name} preset applied. Restart the bot to activate.")
+
+        st.divider()
+
+        # ── Bot settings — no .py editing required.
+        st.subheader("Bot Settings")
+        col_ai, col_mode, col_tg, col_wd = st.columns(4)
+        with col_ai:
+            ai_on = st.checkbox("AI Analyst", value=bool(cfg.get("AI_ENABLED", True)))
+        with col_mode:
+            live_default = st.checkbox("Default mode: LIVE",
+                                       value=not bool(cfg.get("PAPER_TRADING", True)),
+                                       help="Only applies when the bot is launched without an "
+                                           "explicit mode — the Start button's own Paper/Live "
+                                           "choice always takes priority over this.")
+        with col_tg:
+            tg_on = st.checkbox("Telegram Notifications", value=bool(cfg.get("TELEGRAM_ENABLED", True)))
+        with col_wd:
+            wd_on = st.checkbox("Watchdog Auto-Restart", value=False)
+
+        pool = st.number_input("Paper Starting Pool (USDT)", min_value=1.0,
+                               value=float(cfg.get("PAPER_STARTING_USDT", 100.0)), step=10.0)
+
+        if st.button("💾 Save Bot Settings"):
+            settings_writer.write_config_values({
+                "AI_ENABLED":            ai_on,
+                "PAPER_TRADING":         not live_default,
+                "TELEGRAM_ENABLED":      tg_on,
+                "WATCHDOG_AUTO_RESTART": wd_on,
+                "PAPER_STARTING_USDT":   pool,
+            })
+            st.cache_data.clear()
+            st.success("Bot settings saved. Restart the bot to apply.")
+
+        st.divider()
+
+        # ── Exchange API keys — the on-ramp for anyone who's never opened
+        # a .py file. Writes bot_secrets.py + flips config.py's per-exchange
+        # "enabled" flag, same as the desktop GUI's Config tab.
+        st.subheader("Exchange API Keys")
+
+        exch_display_to_key = {v: k for k, v in settings_writer.EXCHANGE_DISPLAY.items()}
+        exch_choice = st.selectbox("Exchange", list(settings_writer.EXCHANGE_DISPLAY.values()))
+        exch_key = exch_display_to_key[exch_choice]
+
+        current_exchange_cfg = {}
+        try:
+            import config as _cfg_mod
+            current_exchange_cfg = _cfg_mod.EXCHANGES.get(exch_key, {})
+        except Exception:
+            pass
+
+        exch_enabled = st.checkbox("Enabled for trading",
+                                   value=bool(current_exchange_cfg.get("enabled", False)),
+                                   key=f"enabled_{exch_key}")
+
+        field_values = {}
+        for field_key, secret_var, label in settings_writer.EXCHANGE_FIELDS[exch_key]:
+            field_values[secret_var] = st.text_input(
+                label, value=str(current_exchange_cfg.get(field_key, "") or ""),
+                key=f"{exch_key}_{field_key}")
+
+        st.caption("Saved keys go to bot_secrets.py (gitignored — never committed to GitHub) "
+                  "and the selected exchange is enabled/disabled in config.py. "
+                  "Restart the bot to apply.")
+
+        if st.button("💾 Save API Keys"):
+            settings_writer.write_bot_secrets(field_values)
+            settings_writer.write_exchange_enabled(exch_key, exch_enabled)
+            st.cache_data.clear()
+            st.success(f"{exch_choice} credentials saved. Restart the bot to apply.")
 
         st.divider()
         st.subheader("📋 Recommended Workflow")

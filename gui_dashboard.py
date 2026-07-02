@@ -1,18 +1,27 @@
 """
-CryptoTradingBot — Modern GUI Dashboard
+HazMat Crypto Bot — Modern GUI Dashboard
 ==========================================
-Clean dark-themed desktop dashboard.
-Built with tkinter (included in Python — no extra install).
+Dark-themed desktop dashboard styled after software-suite control panels
+(top tab bar, rounded stat cards) rather than a typical sidebar app.
+Built on CustomTkinter (a rounded-corner skin over stdlib tkinter).
 
 Run: python gui_dashboard.py
 Or:  Double-click START_BOT.bat → [3] GUI Dashboard
 """
 
-import os, sys, glob, threading, importlib, re
+import os, sys, glob, threading, importlib, re, json, subprocess
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, messagebox
 from datetime import datetime, date
 from pathlib import Path
+
+import bootstrap
+bootstrap.ensure_installed(gui=True)
+
+import customtkinter as ctk
+
+import settings_writer
+from settings_writer import EXCHANGE_DISPLAY, EXCHANGE_FIELDS
 
 # ── Palette ────────────────────────────────────────────────────────────────
 C = {
@@ -31,6 +40,9 @@ C = {
     "teal":     "#39d353",
     "white":    "#ffffff",
 }
+
+# Fire gradient (deep red -> bright yellow-orange) for the "HazMat" wordmark.
+FIRE_COLORS = ["#7f0000", "#b3001b", "#e8451e", "#ff6f00", "#ff9e00", "#ffc300"]
 
 def _font(win_name, other_name, size, weight=None):
     """
@@ -60,65 +72,85 @@ def hex_to_rgb(h):
     return tuple(int(h[i:i+2], 16) for i in (0,2,4))
 
 
-class Card(tk.Frame):
+def _lighten(h, amount=30):
+    r, g, b = hex_to_rgb(h)
+    r = min(255, r+amount); g = min(255, g+amount); b = min(255, b+amount)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _pack_fire_text(parent, text, bg, font, colors=FIRE_COLORS, pady=14):
+    """Packs `text` one character at a time, each colored from a fire
+    gradient, into `parent` (side='left'). Tkinter labels can't render a
+    smooth gradient fill, so this is the practical per-letter stand-in —
+    used for the "HazMat" wordmark so it reads as flame-colored."""
+    for i, ch in enumerate(text):
+        tk.Label(parent, text=ch, bg=bg, fg=colors[i % len(colors)],
+                font=font).pack(side="left", pady=pady)
+
+
+class Card(ctk.CTkFrame):
+    """Rounded, bordered panel — the base 'tile' unit of the whole UI,
+    styled after control-panel software (AMD Adrenaline, NVIDIA app)
+    rather than a flat sidebar-app card."""
     def __init__(self, parent, title="", **kw):
-        super().__init__(parent, bg=C["surface"],
-                        highlightbackground=C["border"],
-                        highlightthickness=1, **kw)
+        super().__init__(parent, fg_color=C["surface"], border_color=C["border"],
+                        border_width=1, corner_radius=14, **kw)
         if title:
             tk.Label(self, text=title, bg=C["surface"], fg=C["muted"],
                     font=("Segoe UI", 9, "bold") if sys.platform=="win32" else ("SF Pro",9,"bold"),
-                    anchor="w").pack(fill="x", padx=12, pady=(10,2))
-            tk.Frame(self, height=1, bg=C["border"]).pack(fill="x", padx=12)
+                    anchor="w").pack(fill="x", padx=14, pady=(12,4))
+            ctk.CTkFrame(self, height=1, fg_color=C["border"], corner_radius=0
+                        ).pack(fill="x", padx=14)
 
 
-class MetricTile(tk.Frame):
-    def __init__(self, parent, label, **kw):
-        super().__init__(parent, bg=C["surface"],
-                        highlightbackground=C["border"],
-                        highlightthickness=1, **kw)
-        tk.Label(self, text=label, bg=C["surface"], fg=C["muted"],
+class MetricTile(ctk.CTkFrame):
+    """Stat card with a colored accent bar down the left edge — the
+    'gauge tile' look of a hardware control panel."""
+    def __init__(self, parent, label, accent=None, **kw):
+        super().__init__(parent, fg_color=C["surface"], border_color=C["border"],
+                        border_width=1, corner_radius=14, **kw)
+        self._accent = ctk.CTkFrame(self, width=4, fg_color=accent or C["border"],
+                                    corner_radius=0)
+        self._accent.pack(side="left", fill="y")
+        body = tk.Frame(self, bg=C["surface"])
+        body.pack(side="left", fill="both", expand=True)
+
+        tk.Label(body, text=label, bg=C["surface"], fg=C["muted"],
                 font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9)
                 ).pack(anchor="w", padx=12, pady=(10,2))
-        self.value_lbl = tk.Label(self, text="—", bg=C["surface"],
+        self.value_lbl = tk.Label(body, text="—", bg=C["surface"],
                                   fg=C["text"], font=FONT_NUM)
         self.value_lbl.pack(anchor="w", padx=12)
-        self.sub_lbl   = tk.Label(self, text="", bg=C["surface"],
+        self.sub_lbl   = tk.Label(body, text="", bg=C["surface"],
                                   fg=C["muted"],
                                   font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8))
         self.sub_lbl.pack(anchor="w", padx=12, pady=(0,10))
 
     def set(self, value, sub="", color=None):
-        self.value_lbl.configure(text=str(value),
-                                 fg=color or C["text"])
+        self.value_lbl.configure(text=str(value), fg=color or C["text"])
         self.sub_lbl.configure(text=sub)
+        self._accent.configure(fg_color=color or C["border"])
 
 
-class PillButton(tk.Label):
+class PillButton(ctk.CTkButton):
     def __init__(self, parent, text, command=None, color=C["blue"], **kw):
-        super().__init__(parent, text=text, bg=color, fg=C["white"],
+        super().__init__(parent, text=text, command=command,
+                        fg_color=color, hover_color=_lighten(color),
+                        text_color=C["white"], corner_radius=8, height=30,
                         font=("Segoe UI",9,"bold") if sys.platform=="win32" else ("SF Pro",9,"bold"),
-                        padx=14, pady=6, cursor="hand2", **kw)
-        if command:
-            self.bind("<Button-1>", lambda e: command())
-        self.bind("<Enter>", lambda e: self.configure(bg=self._lighten(color)))
-        self.bind("<Leave>", lambda e: self.configure(bg=color))
+                        **kw)
         self._base_color = color
-
-    def _lighten(self, h):
-        r,g,b = hex_to_rgb(h)
-        r = min(255, r+30); g = min(255, g+30); b = min(255, b+30)
-        return f"#{r:02x}{g:02x}{b:02x}"
 
 
 class Dashboard:
 
     def __init__(self, root):
         self.root = root
-        root.title("CryptoTradingBot")
+        root.title("HazMat Crypto Bot")
         root.geometry("1280x820")
         root.minsize(960, 640)
-        root.configure(bg=C["bg"])
+        self._bot_proc      = None
+        self._watchdog_proc = None
         self._build()
         self._start_auto_refresh()
 
@@ -128,90 +160,81 @@ class Dashboard:
 
     def _build(self):
         self._build_topbar()
-        self._build_sidebar()
+        self._build_tabbar()
         self._build_main()
 
     def _build_topbar(self):
-        bar = tk.Frame(self.root, bg=C["surface"],
-                      highlightbackground=C["border"],
-                      highlightthickness=1, height=52)
+        bar = tk.Frame(self.root, bg=C["surface"], height=56,
+                      highlightbackground=C["border"], highlightthickness=0)
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
-        # Logo + title
-        tk.Label(bar, text="⬡", bg=C["surface"], fg=C["blue"],
-                font=("Segoe UI",18) if sys.platform=="win32" else ("SF Pro",18)
-                ).pack(side="left", padx=(16,4), pady=12)
-        tk.Label(bar, text="CryptoTradingBot", bg=C["surface"],
-                fg=C["white"], font=FONT_TITLE).pack(side="left", pady=12)
+        # Logo + title — "HazMat" rendered in a fire gradient, plain white
+        # for the rest of the name.
+        tk.Label(bar, text="🔥", bg=C["surface"], fg=C["orange"],
+                font=("Segoe UI",20) if sys.platform=="win32" else ("SF Pro",20)
+                ).pack(side="left", padx=(18,4), pady=14)
+        _pack_fire_text(bar, "HazMat", C["surface"], FONT_TITLE)
+        tk.Label(bar, text=" Crypto Bot", bg=C["surface"],
+                fg=C["white"], font=FONT_TITLE).pack(side="left", pady=14)
 
         # Status badge
         self.status_badge = tk.Label(bar, text="● LOADING",
                                      bg=C["surface"], fg=C["yellow"],
                                      font=("Segoe UI",9,"bold") if sys.platform=="win32" else ("SF Pro",9,"bold"))
-        self.status_badge.pack(side="left", padx=16)
+        self.status_badge.pack(side="left", padx=18)
 
         self.clock_lbl = tk.Label(bar, text="", bg=C["surface"],
                                   fg=C["muted"],
                                   font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9))
         self.clock_lbl.pack(side="left")
 
+        PillButton(bar, "⬆  Updates", self._check_updates, C["purple"]).pack(side="left", padx=(14,0))
+
         # Right controls
         ctrl = tk.Frame(bar, bg=C["surface"])
-        ctrl.pack(side="right", padx=12)
+        ctrl.pack(side="right", padx=14)
 
+        PillButton(ctrl, "🚀  Start",  self._start_bot, C["teal"]).pack(side="left", padx=3)
         PillButton(ctrl, "⏸  Pause",  self._pause,  C["yellow"]).pack(side="left", padx=3)
         PillButton(ctrl, "▶  Resume", self._resume, C["green"]).pack(side="left",  padx=3)
         PillButton(ctrl, "⟳  Refresh",self._refresh,C["blue"]).pack(side="left",  padx=3)
 
-    def _build_sidebar(self):
-        self.sidebar = tk.Frame(self.root, bg=C["surface"],
-                               highlightbackground=C["border"],
-                               highlightthickness=1, width=180)
-        self.sidebar.pack(side="left", fill="y")
-        self.sidebar.pack_propagate(False)
+    def _build_tabbar(self):
+        """Horizontal top tab strip (control-panel style) with an accent
+        underline on the active tab — replaces the old left sidebar nav."""
+        bar = tk.Frame(self.root, bg=C["surface"], height=46)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+        ctk.CTkFrame(self.root, height=1, fg_color=C["border"], corner_radius=0).pack(fill="x")
 
-        tk.Label(self.sidebar, text="NAVIGATION", bg=C["surface"],
-                fg=C["muted"],
-                font=("Segoe UI",8,"bold") if sys.platform=="win32" else ("SF Pro",8,"bold")
-                ).pack(anchor="w", padx=16, pady=(20,8))
-
-        self._pages   = {}
-        self._nav_btns = {}
+        self._nav_tabs = {}
         pages = [
             ("📊", "Overview"),
             ("💰", "Pools"),
             ("📋", "Trades"),
+            ("🧾", "Reports"),
             ("📰", "News"),
             ("⚙️", "Config"),
             ("📁", "Logs"),
         ]
 
+        # Fixed (not expand/fill) column widths — CTkButton's canvas-based
+        # rendering doesn't negotiate pack()'s expand+fill evenly across
+        # many siblings, so a fixed width per tab is what actually renders
+        # reliably at every window size.
         for icon, name in pages:
-            btn = tk.Frame(self.sidebar, bg=C["surface"], cursor="hand2")
-            btn.pack(fill="x", padx=8, pady=1)
-            lbl = tk.Label(btn, text=f"  {icon}  {name}",
-                          bg=C["surface"], fg=C["muted"],
-                          font=("Segoe UI",10) if sys.platform=="win32" else ("SF Pro",10),
-                          anchor="w", padx=8, pady=8)
-            lbl.pack(fill="x")
-            self._nav_btns[name] = (btn, lbl)
-            for w in (btn, lbl):
-                w.bind("<Button-1>", lambda e, n=name: self._nav(n))
-                w.bind("<Enter>",    lambda e, b=btn, l=lbl: [
-                    b.configure(bg=C["hover"]), l.configure(bg=C["hover"])])
-                w.bind("<Leave>",    lambda e, n=name, b=btn, l=lbl: [
-                    b.configure(bg=C["surface"] if self._current_page != n else C["border"]),
-                    l.configure(bg=C["surface"] if self._current_page != n else C["border"])])
-
-        # Strategy info at bottom
-        tk.Frame(self.sidebar, height=1, bg=C["border"]).pack(fill="x", padx=16, pady=16)
-        self.engine_info = tk.Label(self.sidebar,
-                                    text="Engine: loading...",
-                                    bg=C["surface"], fg=C["muted"],
-                                    font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8),
-                                    justify="left", wraplength=150)
-        self.engine_info.pack(anchor="w", padx=16)
+            col = tk.Frame(bar, bg=C["surface"], width=150, height=40)
+            col.pack(side="left", padx=2, pady=(6,0))
+            col.pack_propagate(False)
+            btn = ctk.CTkButton(col, text=f"{icon}  {name}", command=lambda n=name: self._nav(n),
+                               fg_color="transparent", hover_color=C["hover"],
+                               text_color=C["muted"], corner_radius=8, height=32, width=146,
+                               font=("Segoe UI",10) if sys.platform=="win32" else ("SF Pro",10))
+            btn.pack()
+            underline = ctk.CTkFrame(col, height=3, fg_color="transparent", corner_radius=0)
+            underline.pack(fill="x", pady=(4,0))
+            self._nav_tabs[name] = (btn, underline)
 
     def _build_main(self):
         self.main = tk.Frame(self.root, bg=C["bg"])
@@ -220,7 +243,7 @@ class Dashboard:
         self._current_page = "Overview"
         self._page_frames  = {}
 
-        for name in ("Overview","Pools","Trades","News","Config","Logs"):
+        for name in ("Overview","Pools","Trades","Reports","News","Config","Logs"):
             f = tk.Frame(self.main, bg=C["bg"])
             self._page_frames[name] = f
             getattr(self, f"_build_{name.lower()}")()
@@ -278,17 +301,14 @@ class Dashboard:
         sig_card = Card(lower, title="RECENT SIGNALS")
         sig_card.pack(side="left", fill="both", expand=True, padx=(4,0))
 
-        self.sig_text = tk.Text(sig_card, bg=C["surface"], fg=C["text"],
-                               font=FONT_MONO, relief="flat", wrap="word",
-                               height=10, state="disabled")
-        self.sig_text.tag_configure("buy",     foreground=C["green"])
-        self.sig_text.tag_configure("sell",    foreground=C["red"])
-        self.sig_text.tag_configure("warn",    foreground=C["yellow"])
-        self.sig_text.tag_configure("engine",  foreground=C["purple"])
-        self.sig_text.tag_configure("normal",  foreground=C["muted"])
-        sb = ttk.Scrollbar(sig_card, command=self.sig_text.yview)
-        self.sig_text.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
+        self.sig_text = ctk.CTkTextbox(sig_card, fg_color=C["surface"], text_color=C["text"],
+                                      font=FONT_MONO, wrap="word", corner_radius=0,
+                                      border_width=0, height=220, state="disabled")
+        self.sig_text.tag_config("buy",     foreground=C["green"])
+        self.sig_text.tag_config("sell",    foreground=C["red"])
+        self.sig_text.tag_config("warn",    foreground=C["yellow"])
+        self.sig_text.tag_config("engine",  foreground=C["purple"])
+        self.sig_text.tag_config("normal",  foreground=C["muted"])
         self.sig_text.pack(fill="both", expand=True, padx=12, pady=8)
 
     def _build_pools(self):
@@ -347,6 +367,112 @@ class Dashboard:
         vsb.pack(side="right", fill="y")
         self.trade_tree.pack(fill="both", expand=True, padx=12, pady=8)
 
+    def _build_reports(self):
+        p = self._page_frames["Reports"]
+        self._report_period = "daily"
+
+        hdr = tk.Frame(p, bg=C["bg"])
+        hdr.pack(fill="x", padx=16, pady=(16,8))
+        tk.Label(hdr, text="Trading Reports", bg=C["bg"], fg=C["text"],
+                font=FONT_TITLE).pack(side="left")
+
+        self._report_btns = {}
+        btn_row = tk.Frame(hdr, bg=C["bg"])
+        btn_row.pack(side="right")
+        for period, label in (("daily","Daily"),("monthly","Monthly"),("yearly","Yearly")):
+            b = PillButton(btn_row, label, lambda pr=period: self._select_report_period(pr),
+                          C["blue"] if period == "daily" else C["border"])
+            b.pack(side="left", padx=3)
+            self._report_btns[period] = b
+
+        self.report_label = tk.Label(p, text="", bg=C["bg"], fg=C["muted"],
+                                     font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9))
+        self.report_label.pack(anchor="w", padx=16)
+
+        metrics = tk.Frame(p, bg=C["bg"])
+        metrics.pack(fill="x", padx=16, pady=8)
+        self.r_trades = MetricTile(metrics, "TRADES")
+        self.r_wr     = MetricTile(metrics, "WIN RATE")
+        self.r_gross  = MetricTile(metrics, "GROSS P&L")
+        self.r_fees   = MetricTile(metrics, "FEES")
+        self.r_net    = MetricTile(metrics, "NET P&L")
+        self.r_roi    = MetricTile(metrics, "ROI")
+        for t in (self.r_trades, self.r_wr, self.r_gross, self.r_fees, self.r_net, self.r_roi):
+            t.pack(side="left", fill="both", expand=True, padx=4)
+
+        lower = tk.Frame(p, bg=C["bg"])
+        lower.pack(fill="both", expand=True, padx=16, pady=8)
+
+        coin_card = Card(lower, title="BY COIN")
+        coin_card.pack(side="left", fill="both", expand=True, padx=(0,4))
+        cols = ("Coin","Trades","Gross","Fees","Net")
+        self.report_tree = ttk.Treeview(coin_card, columns=cols,
+                                        show="headings", style="Pos.Treeview")
+        for c, w in zip(cols, [90,70,90,90,90]):
+            self.report_tree.heading(c, text=c); self.report_tree.column(c, width=w, anchor="center")
+        self.report_tree.tag_configure("win",  foreground=C["green"])
+        self.report_tree.tag_configure("loss", foreground=C["red"])
+        self.report_tree.pack(fill="both", expand=True, padx=12, pady=8)
+
+        best_card = Card(lower, title="BEST / WORST TRADE")
+        best_card.pack(side="left", fill="both", expand=True, padx=(4,0))
+        self.report_best_table = self._make_kv_table(best_card)
+
+    def _select_report_period(self, period):
+        self._report_period = period
+        for pr, b in self._report_btns.items():
+            color = C["blue"] if pr == period else C["border"]
+            b.configure(fg_color=color, hover_color=_lighten(color))
+            b._base_color = color
+        self._load_report()
+
+    def _load_report(self):
+        def _fetch():
+            try:
+                from reports import build_report
+                import config as cfg
+                importlib.reload(cfg)
+                starting = getattr(cfg, "PAPER_STARTING_USDT", 100.0)
+                report = build_report(self._report_period, starting_pool=starting)
+                self.root.after(0, lambda: self._render_report(report))
+            except Exception as e:
+                self.root.after(0, lambda: self.report_label.configure(
+                    text=f"Could not load report: {e}", fg=C["red"]))
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _render_report(self, report):
+        self.report_label.configure(
+            text=f"{report['label']}  ·  {report['start']} → {report['end']}", fg=C["muted"])
+
+        gross_col = C["green"] if report["gross_pnl"] >= 0 else C["red"]
+        net_col   = C["green"] if report["net_pnl"]   >= 0 else C["red"]
+        roi_col   = C["green"] if report["roi_pct"]   >= 0 else C["red"]
+        wr_col    = C["green"] if report["wins"] >= report["losses"] else C["red"]
+
+        self.r_trades.set(str(report["num_trades"]))
+        self.r_wr.set(f"{report['win_rate']:.0f}%", f"{report['wins']}W  {report['losses']}L", wr_col)
+        self.r_gross.set(f"{'+' if report['gross_pnl']>=0 else ''}${report['gross_pnl']:.4f}", "", gross_col)
+        self.r_fees.set(f"-${report['fees']:.4f}")
+        self.r_net.set(f"{'+' if report['net_pnl']>=0 else ''}${report['net_pnl']:.4f}", "net after fees", net_col)
+        self.r_roi.set(f"{'+' if report['roi_pct']>=0 else ''}{report['roi_pct']:.2f}%", "", roi_col)
+
+        self.report_tree.delete(*self.report_tree.get_children())
+        for coin, s in report["by_coin"].items():
+            tag = "win" if s["net"] >= 0 else "loss"
+            self.report_tree.insert("", "end", values=(
+                coin, s["n"], f"{'+' if s['gross']>=0 else ''}${s['gross']:.4f}",
+                f"-${s['fees']:.4f}", f"{'+' if s['net']>=0 else ''}${s['net']:.4f}"), tags=(tag,))
+
+        best, worst = report["best_trade"], report["worst_trade"]
+        rows = []
+        if best:
+            rows.append(("Best trade", f"{best['coin']}  net +${best.get('pnl_net',0):.4f}"))
+        if worst:
+            rows.append(("Worst trade", f"{worst['coin']}  net ${worst.get('pnl_net',0):.4f}"))
+        if not rows:
+            rows.append(("—", "No trades in this period"))
+        self._fill_kv(self.report_best_table, rows)
+
     def _build_news(self):
         p = self._page_frames["News"]
 
@@ -389,19 +515,99 @@ class Dashboard:
                 font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
                 ).pack(side="left")
 
-        card = Card(p)
+        # ── Exchange API keys — lets someone who's never opened a .py file
+        # enter credentials and pick an exchange straight from the GUI.
+        ek_card = Card(p, title="EXCHANGE API KEYS")
+        ek_card.pack(fill="x", padx=16, pady=8)
+
+        sel_row = tk.Frame(ek_card, bg=C["surface"])
+        sel_row.pack(fill="x", padx=12, pady=(4,4))
+        tk.Label(sel_row, text="Exchange:", bg=C["surface"], fg=C["muted"],
+                font=FONT_UI).pack(side="left", padx=(0,8))
+
+        self._exch_display_to_key = {v: k for k, v in EXCHANGE_DISPLAY.items()}
+        self.exch_key_var = tk.StringVar(value="kucoin")
+        self.exch_combobox = ctk.CTkComboBox(
+            sel_row, values=list(EXCHANGE_DISPLAY.values()),
+            command=self._on_exchange_selected, width=160, height=30, corner_radius=8,
+            fg_color=C["bg"], border_color=C["border"], button_color=C["border"],
+            button_hover_color=C["hover"], dropdown_fg_color=C["surface"], font=FONT_UI)
+        self.exch_combobox.set(EXCHANGE_DISPLAY["kucoin"])
+        self.exch_combobox.pack(side="left", padx=(0,16))
+
+        self.exch_enabled_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(sel_row, text="Enabled for trading", variable=self.exch_enabled_var,
+                       fg_color=C["blue"], hover_color=_lighten(C["blue"]),
+                       text_color=C["text"], font=FONT_UI).pack(side="left", padx=(0,16))
+
+        PillButton(sel_row, "💾  Save Keys", self._save_exchange_credentials, C["green"]).pack(side="left")
+
+        self.exch_fields_frame = tk.Frame(ek_card, bg=C["surface"])
+        self.exch_fields_frame.pack(fill="x", padx=12, pady=(4,4))
+        self._exch_entries = {}
+        self._build_exchange_fields("kucoin")
+
+        tk.Label(ek_card,
+                text="Saved keys go to bot_secrets.py (gitignored — never committed to GitHub) "
+                    "and the selected exchange is enabled/disabled in config.py. Restart the bot to apply.",
+                bg=C["surface"], fg=C["muted"], wraplength=1150, justify="left",
+                font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
+                ).pack(anchor="w", padx=12, pady=(0,10))
+
+        # ── Bot settings — the everyday toggles someone would otherwise
+        # have to open config.py to flip.
+        bs_card = Card(p, title="BOT SETTINGS")
+        bs_card.pack(fill="x", padx=16, pady=8)
+
+        bs_row = tk.Frame(bs_card, bg=C["surface"])
+        bs_row.pack(fill="x", padx=12, pady=(4,4))
+
+        self.ai_enabled_var       = tk.BooleanVar(value=True)
+        self.telegram_enabled_var = tk.BooleanVar(value=True)
+        self.watchdog_restart_var = tk.BooleanVar(value=False)
+        self.default_mode_var     = tk.BooleanVar(value=False)   # False=Paper, True=Live
+
+        for var, label in (
+            (self.ai_enabled_var,       "AI Analyst"),
+            (self.default_mode_var,     "Default mode: LIVE (off = Paper)"),
+            (self.telegram_enabled_var, "Telegram Notifications"),
+            (self.watchdog_restart_var, "Watchdog Auto-Restart"),
+        ):
+            ctk.CTkSwitch(bs_row, text=label, variable=var, onvalue=True, offvalue=False,
+                        progress_color=C["green"], button_color=C["text"],
+                        text_color=C["text"], font=FONT_UI).pack(side="left", padx=(0,20))
+
+        bs_row2 = tk.Frame(bs_card, bg=C["surface"])
+        bs_row2.pack(fill="x", padx=12, pady=(8,4))
+        tk.Label(bs_row2, text="Paper Starting Pool (USDT):", bg=C["surface"], fg=C["muted"],
+                font=FONT_UI).pack(side="left", padx=(0,8))
+        self.paper_pool_entry = ctk.CTkEntry(bs_row2, width=100, height=28, corner_radius=6,
+                                            fg_color=C["bg"], border_color=C["border"],
+                                            text_color=C["text"], font=FONT_MONO)
+        self.paper_pool_entry.pack(side="left", padx=(0,20))
+
+        PillButton(bs_row2, "💾  Save Settings", self._save_bot_settings, C["green"]).pack(side="left")
+
+        tk.Label(bs_card,
+                text="\"Default mode\" only applies when the bot is launched without an explicit "
+                    "mode — the Start button's own Paper/Live prompt always takes priority over it. "
+                    "Restart the bot to apply any of these.",
+                bg=C["surface"], fg=C["muted"], wraplength=1150, justify="left",
+                font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8)
+                ).pack(anchor="w", padx=12, pady=(0,10))
+
+        self._load_bot_settings()
+
+        card = Card(p, title="config.py (read-only preview)")
         card.pack(fill="both", expand=True, padx=16, pady=8)
 
-        self.cfg_text = tk.Text(card, bg=C["surface"], fg=C["text"],
-                               font=FONT_MONO, relief="flat", wrap="none",
-                               state="disabled")
-        self.cfg_text.tag_configure("key",     foreground=C["blue"])
-        self.cfg_text.tag_configure("val",     foreground=C["green"])
-        self.cfg_text.tag_configure("section", foreground=C["yellow"])
-        self.cfg_text.tag_configure("comment", foreground=C["muted"])
-        vsb = ttk.Scrollbar(card, command=self.cfg_text.yview)
-        self.cfg_text.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
+        self.cfg_text = ctk.CTkTextbox(card, fg_color=C["surface"], text_color=C["text"],
+                                      font=FONT_MONO, wrap="none", corner_radius=0,
+                                      border_width=0, height=220, state="disabled")
+        self.cfg_text.tag_config("key",     foreground=C["blue"])
+        self.cfg_text.tag_config("val",     foreground=C["green"])
+        self.cfg_text.tag_config("section", foreground=C["yellow"])
+        self.cfg_text.tag_config("comment", foreground=C["muted"])
         self.cfg_text.pack(fill="both", expand=True, padx=12, pady=8)
 
     def _build_logs(self):
@@ -421,8 +627,11 @@ class Dashboard:
         tk.Label(ctrl, text="File:", bg=C["bg"], fg=C["muted"],
                 font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9)
                 ).pack(side="left")
-        cb = ttk.Combobox(ctrl, textvariable=self.log_var, values=logs,
-                         width=28, font=FONT_MONO)
+        cb = ctk.CTkComboBox(ctrl, variable=self.log_var, values=logs,
+                            width=280, height=30, corner_radius=8,
+                            fg_color=C["surface"], border_color=C["border"],
+                            button_color=C["border"], button_hover_color=C["hover"],
+                            dropdown_fg_color=C["surface"], font=FONT_MONO)
         cb.pack(side="left", padx=6)
         PillButton(ctrl, "Load",        self._load_log,  C["blue"]).pack(side="left",  padx=3)
         PillButton(ctrl, "Last 100",    self._tail_log,  C["purple"]).pack(side="left",padx=3)
@@ -430,21 +639,15 @@ class Dashboard:
 
         card = Card(p)
         card.pack(fill="both", expand=True, padx=16, pady=8)
-        self.log_text = tk.Text(card, bg="#090d12", fg="#00d084",
-                               font=FONT_MONO, relief="flat",
-                               wrap="none", state="disabled")
-        self.log_text.tag_configure("ERROR",   foreground=C["red"])
-        self.log_text.tag_configure("WARNING", foreground=C["yellow"])
-        self.log_text.tag_configure("BUY",     foreground=C["green"])
-        self.log_text.tag_configure("SELL",    foreground=C["orange"])
-        self.log_text.tag_configure("ENGINE",  foreground=C["purple"])
-        self.log_text.tag_configure("normal",  foreground="#00d084")
-        vsb = ttk.Scrollbar(card, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        hsb = ttk.Scrollbar(card, orient="horizontal", command=self.log_text.xview)
-        self.log_text.configure(xscrollcommand=hsb.set)
-        hsb.pack(side="bottom", fill="x")
+        self.log_text = ctk.CTkTextbox(card, fg_color="#090d12", text_color="#00d084",
+                                      font=FONT_MONO, wrap="none", corner_radius=0,
+                                      border_width=0, state="disabled")
+        self.log_text.tag_config("ERROR",   foreground=C["red"])
+        self.log_text.tag_config("WARNING", foreground=C["yellow"])
+        self.log_text.tag_config("BUY",     foreground=C["green"])
+        self.log_text.tag_config("SELL",    foreground=C["orange"])
+        self.log_text.tag_config("ENGINE",  foreground=C["purple"])
+        self.log_text.tag_config("normal",  foreground="#00d084")
         self.log_text.pack(fill="both", expand=True, padx=12, pady=8)
         self._auto_follow = False
 
@@ -453,11 +656,11 @@ class Dashboard:
     # ══════════════════════════════════════════════════════════════════════
 
     def _nav(self, page: str):
-        for name, (btn, lbl) in self._nav_btns.items():
+        for name, (btn, underline) in self._nav_tabs.items():
             active = (name == page)
-            bg = C["border"] if active else C["surface"]
-            fg = C["white"]  if active else C["muted"]
-            btn.configure(bg=bg); lbl.configure(bg=bg, fg=fg)
+            btn.configure(fg_color=C["hover"] if active else "transparent",
+                         text_color=C["white"] if active else C["muted"])
+            underline.configure(fg_color=C["blue"] if active else "transparent")
 
         for name, frame in self._page_frames.items():
             if name == page:
@@ -466,6 +669,11 @@ class Dashboard:
                 frame.pack_forget()
 
         self._current_page = page
+
+        if page == "Pools" and getattr(self, "_last_pool_bar_args", None):
+            self.root.after(50, lambda: self._draw_pool_bar(*self._last_pool_bar_args))
+        elif page == "News" and getattr(self, "_last_news_scores", None):
+            self.root.after(50, lambda: self._draw_news(self._last_news_scores))
 
     # ══════════════════════════════════════════════════════════════════════
     #  DATA LOADING
@@ -478,6 +686,7 @@ class Dashboard:
         self._load_config()
         self._load_trades()
         self._load_engine_stats()
+        self._load_report()
         self.root.after(0, self._update_clock)
 
     def _load_config(self):
@@ -501,8 +710,11 @@ class Dashboard:
             self.root.after(0, lambda: self.t_aggr.set(f"${pool*aggr:.2f}",
                                                         f"{aggr*100:.0f}% aggressive",
                                                         C["orange"]))
-            # Update pool bar
-            self.root.after(100, lambda: self._draw_pool_bar(pool, pool*norm, pool*aggr, res))
+            # Update pool bar — cached so _nav() can redraw it once the
+            # canvas is actually visible/mapped (drawing while the Pools
+            # tab is hidden reports a bogus 1px width and draws nothing).
+            self._last_pool_bar_args = (pool, pool*norm, pool*aggr, res)
+            self.root.after(100, lambda: self._draw_pool_bar(*self._last_pool_bar_args))
 
             # Normal/aggressive detail tables
             n_data = [
@@ -604,8 +816,6 @@ class Dashboard:
                 ("Status",           "✅ Adapting" if total_trades >= 10 else "⏳ Gathering data"),
             ]
             self.root.after(0, lambda: self._fill_kv(self.engine_table, data))
-            self.root.after(0, lambda: self.engine_info.configure(
-                text=f"Engine\nWR: {avg_wr:.0%}\nEV: ${avg_ev:.4f}"))
         except Exception:
             pass
 
@@ -660,6 +870,7 @@ class Dashboard:
                          fill=C["bg"], font=("Segoe UI",9,"bold") if sys.platform=="win32" else ("SF Pro",9,"bold"))
 
     def _draw_news(self, scores: dict):
+        self._last_news_scores = scores  # so _nav() can redraw once visible/mapped
         c = self.news_canvas
         c.delete("all")
         w = c.winfo_width() or 900
@@ -754,6 +965,108 @@ class Dashboard:
     #  CONTROLS
     # ══════════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _pid_alive(pid):
+        """Cross-platform PID liveness check — deliberately reimplemented
+        here rather than importing watchdog.py, since that module runs
+        logging.basicConfig() and opens a raw stdout handle at import
+        time (fine for its own standalone process, not something this
+        GUI process should also be doing as a side effect of a button)."""
+        if not pid:
+            return False
+        try:
+            if sys.platform == "win32":
+                result = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                                        capture_output=True, text=True, timeout=10)
+                return str(pid) in result.stdout
+            else:
+                os.kill(pid, 0)
+                return True
+        except (ProcessLookupError, PermissionError):
+            return False
+        except Exception:
+            return False
+
+    def _bot_is_running(self):
+        """True if logs/liveness.json shows a recent ping from a still-alive
+        PID — i.e. some bot.py process (from this GUI, a terminal, or a
+        prior session) is currently running, regardless of who started it."""
+        try:
+            with open("logs/liveness.json") as f:
+                data = json.load(f)
+            last_ping = datetime.fromisoformat(data["last_ping"])
+            if (datetime.now() - last_ping).total_seconds() > 300:
+                return False
+            return self._pid_alive(data.get("pid"))
+        except Exception:
+            return False
+
+    def _start_bot(self):
+        if self._bot_is_running():
+            messagebox.showinfo("Already Running",
+                "The bot already appears to be running (a recent liveness "
+                "ping was found in logs/liveness.json).\n\n"
+                "If this is wrong — e.g. a stale file left over from a "
+                "crash — delete logs/liveness.json and try again.")
+            return
+
+        mode = messagebox.askyesnocancel("Start Bot",
+            "Which mode?\n\n"
+            "Yes = LIVE trading (uses real money)\n"
+            "No = Paper trading (simulation)\n"
+            "Cancel = don't start")
+        if mode is None:
+            return
+        mode_str = "live" if mode else "paper"
+
+        if mode_str == "live" and not messagebox.askyesno("Confirm LIVE Trading",
+                "You are about to start the bot in LIVE mode with real funds.\n\n"
+                "Are you sure you want to continue?"):
+            return
+
+        python_cmd    = sys.executable
+        bot_path      = str(Path("bot.py").resolve())
+        watchdog_path = str(Path("watchdog.py").resolve())
+
+        try:
+            if sys.platform == "win32":
+                self._bot_proc = subprocess.Popen(
+                    [python_cmd, bot_path, "--mode", mode_str],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE)
+            else:
+                self._bot_proc = subprocess.Popen(
+                    [python_cmd, bot_path, "--mode", mode_str],
+                    start_new_session=True)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not start bot.py:\n{e}")
+            return
+
+        # Launch the watchdog alongside it, unless this GUI session already
+        # has one running — so clicking Start repeatedly doesn't stack up
+        # multiple watchdog processes racing each other on the same bot.
+        watchdog_started = False
+        if self._watchdog_proc is None or self._watchdog_proc.poll() is not None:
+            try:
+                if sys.platform == "win32":
+                    self._watchdog_proc = subprocess.Popen(
+                        [python_cmd, watchdog_path],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE)
+                else:
+                    self._watchdog_proc = subprocess.Popen(
+                        [python_cmd, watchdog_path],
+                        start_new_session=True)
+                watchdog_started = True
+            except Exception as e:
+                messagebox.showwarning("Watchdog",
+                    f"Bot started, but could not launch watchdog.py:\n{e}")
+
+        self.status_badge.configure(text=f"●  STARTING ({mode_str.upper()})", fg=C["teal"])
+        messagebox.showinfo("Started",
+            f"Bot started in {mode_str.upper()} mode"
+            f"{', with the watchdog running alongside it' if watchdog_started else ' (watchdog already running from this session)'}.\n\n"
+            "Give it a few seconds, then click Refresh.")
+        self.root.after(3000, self._refresh)
+
     def _pause(self):
         if messagebox.askyesno("Pause Bot",
             "Pause all new buy orders?\nExisting positions continue to be monitored."):
@@ -815,24 +1128,181 @@ class Dashboard:
             "config.py will be updated. Restart bot to apply."):
             return
         try:
-            with open("config.py","r", encoding="utf-8") as f:
-                content = f.read()
-            for key,val in [
-                ("NORMAL_RSI_BUY",nb),("NORMAL_RSI_SELL",ns),
-                ("NORMAL_STOP_LOSS",nsl),("NORMAL_TAKE_PROFIT",ntp),
-                ("AGGRESSIVE_RSI_BUY",ab),("AGGRESSIVE_RSI_SELL",as_),
-                ("AGGRESSIVE_STOP_LOSS",asl),("AGGRESSIVE_TAKE_PROFIT",atp),
-            ]:
-                content = re.sub(
-                    rf"^({re.escape(key)}\s*=\s*)(.+?)(\s*(?:#.*)?)$",
-                    rf"\g<1>{val}\g<3>",
-                    content, flags=re.MULTILINE)
-            with open("config.py","w", encoding="utf-8") as f:
-                f.write(content)
+            settings_writer.write_config_values({
+                "NORMAL_RSI_BUY":nb, "NORMAL_RSI_SELL":ns,
+                "NORMAL_STOP_LOSS":nsl, "NORMAL_TAKE_PROFIT":ntp,
+                "AGGRESSIVE_RSI_BUY":ab, "AGGRESSIVE_RSI_SELL":as_,
+                "AGGRESSIVE_STOP_LOSS":asl, "AGGRESSIVE_TAKE_PROFIT":atp,
+            })
             messagebox.showinfo("Done", f"{name} preset applied.\nRestart bot to activate.")
             self._refresh()
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+    def _load_bot_settings(self):
+        try:
+            import config as cfg
+            importlib.reload(cfg)
+            self.ai_enabled_var.set(bool(getattr(cfg, "AI_ENABLED", True)))
+            self.telegram_enabled_var.set(bool(getattr(cfg, "TELEGRAM_ENABLED", True)))
+            self.watchdog_restart_var.set(bool(getattr(cfg, "WATCHDOG_AUTO_RESTART", False)))
+            self.default_mode_var.set(not bool(getattr(cfg, "PAPER_TRADING", True)))
+            self.paper_pool_entry.delete(0, "end")
+            self.paper_pool_entry.insert(0, str(getattr(cfg, "PAPER_STARTING_USDT", 100.0)))
+        except Exception:
+            pass
+
+    def _save_bot_settings(self):
+        try:
+            pool = float(self.paper_pool_entry.get().strip())
+            if pool <= 0:
+                raise ValueError("Starting pool must be a positive number")
+        except ValueError as e:
+            messagebox.showerror("Invalid Value", f"Paper Starting Pool: {e}")
+            return
+
+        if not messagebox.askyesno("Save Settings",
+                "Save these bot settings to config.py?\nRestart the bot to apply."):
+            return
+        try:
+            settings_writer.write_config_values({
+                "AI_ENABLED":              self.ai_enabled_var.get(),
+                "PAPER_TRADING":           not self.default_mode_var.get(),
+                "TELEGRAM_ENABLED":        self.telegram_enabled_var.get(),
+                "WATCHDOG_AUTO_RESTART":   self.watchdog_restart_var.get(),
+                "PAPER_STARTING_USDT":     pool,
+            })
+            messagebox.showinfo("Saved", "Bot settings saved.\nRestart the bot to apply.")
+            self._refresh()
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save settings:\n{e}")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  EXCHANGE API KEYS  (writes bot_secrets.py + config.py, no .py editing
+    #  required — this is the on-ramp for anyone who's never touched the code)
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _on_exchange_selected(self, display_value):
+        key = self._exch_display_to_key.get(display_value, "kucoin")
+        self.exch_key_var.set(key)
+        self._build_exchange_fields(key)
+
+    def _build_exchange_fields(self, exchange_key):
+        for w in self.exch_fields_frame.winfo_children():
+            w.destroy()
+        self._exch_entries = {}
+
+        current_values, enabled = {}, True
+        try:
+            import config as cfg
+            importlib.reload(cfg)
+            current_values = cfg.EXCHANGES.get(exchange_key, {})
+            enabled = current_values.get("enabled", False)
+        except Exception:
+            pass
+        self.exch_enabled_var.set(bool(enabled))
+
+        for field_key, secret_var, label in EXCHANGE_FIELDS[exchange_key]:
+            row = tk.Frame(self.exch_fields_frame, bg=C["surface"])
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=label, bg=C["surface"], fg=C["muted"], width=26,
+                    anchor="w",
+                    font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9)
+                    ).pack(side="left")
+            entry = ctk.CTkEntry(row, height=28, corner_radius=6, fg_color=C["bg"],
+                                border_color=C["border"], text_color=C["text"],
+                                font=FONT_MONO)
+            val = current_values.get(field_key, "")
+            if val:
+                entry.insert(0, str(val))
+            entry.pack(side="left", fill="x", expand=True, padx=(0,12))
+            self._exch_entries[field_key] = entry
+
+    def _save_exchange_credentials(self):
+        exchange_key = self.exch_key_var.get()
+        fields = EXCHANGE_FIELDS[exchange_key]
+        values = {secret_var: self._exch_entries[field_key].get().strip()
+                 for field_key, secret_var, _label in fields}
+        enabled = bool(self.exch_enabled_var.get())
+
+        if not messagebox.askyesno("Save API Keys",
+                f"Save {EXCHANGE_DISPLAY[exchange_key]} credentials to bot_secrets.py "
+                f"and set it {'enabled' if enabled else 'disabled'} for trading in config.py?\n\n"
+                "Restart the bot for this to take effect."):
+            return
+
+        try:
+            settings_writer.write_bot_secrets(values)
+            settings_writer.write_exchange_enabled(exchange_key, enabled)
+            messagebox.showinfo("Saved",
+                f"{EXCHANGE_DISPLAY[exchange_key]} credentials saved.\n"
+                "Restart the bot (or click Start) to apply.")
+            self._refresh()
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save credentials:\n{e}")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  UPDATES  (reuses auto_updater.py — the same module bot.py's own
+    #  background update-checker and the /update Telegram command use)
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _check_updates(self, silent=False):
+        def _work():
+            try:
+                import auto_updater
+                import config as cfg
+                importlib.reload(cfg)
+                result = auto_updater.check_for_update(cfg)
+            except Exception as e:
+                result = {"update_available": False, "reason": f"Update check failed: {e}"}
+            self.root.after(0, lambda: self._on_update_check_result(result, silent))
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _on_update_check_result(self, result, silent=False):
+        if not result.get("update_available"):
+            if not silent:
+                reason = result.get("reason") or ""
+                messagebox.showinfo("Updates",
+                    "You're up to date." if reason in ("", "Already up to date")
+                    else f"Could not check for updates:\n{reason}")
+            return
+
+        local  = (result.get("local_commit")  or "?")[:8]
+        remote = (result.get("remote_commit") or "?")[:8]
+        if not messagebox.askyesno("Update Available",
+                f"A new version is available.\n\n"
+                f"Current: {local}\nNew:     {remote}\n\n"
+                "Your API keys in bot_secrets.py are gitignored — an update "
+                "never touches that file, so there's nothing to re-enter "
+                "afterward.\n\n"
+                "Pull the update now? (Restart the bot and this GUI "
+                "afterward to run the new version.)"):
+            return
+
+        def _apply():
+            err = None
+            try:
+                import auto_updater
+                import config as cfg
+                importlib.reload(cfg)
+                ok = auto_updater.perform_update(cfg)
+            except Exception as e:
+                ok, err = False, str(e)
+            self.root.after(0, lambda: self._on_update_applied(ok, err))
+        threading.Thread(target=_apply, daemon=True).start()
+
+    def _on_update_applied(self, ok, err):
+        if ok:
+            messagebox.showinfo("Update Applied",
+                "Update pulled successfully. Your bot_secrets.py credentials "
+                "were untouched (gitignored) — no need to re-enter them.\n\n"
+                "Please restart the bot and this GUI to run the new version.")
+        else:
+            messagebox.showerror("Update Failed",
+                err or "The update could not be applied — check logs/watchdog.log "
+                      "or the console for details. A common cause is uncommitted "
+                      "local edits to a tracked file (e.g. a hand-edited "
+                      "config.py) blocking the pull; commit or discard those first.")
 
     # ══════════════════════════════════════════════════════════════════════
     #  AUTO-REFRESH
@@ -842,6 +1312,15 @@ class Dashboard:
         self._refresh()
         self._load_news()
         self._tick()
+        self.root.after(15_000, lambda: self._check_updates(silent=True))
+        self._schedule_update_check()
+
+    def _schedule_update_check(self):
+        self.root.after(3_600_000, self._periodic_update_check)   # hourly
+
+    def _periodic_update_check(self):
+        self._check_updates(silent=True)
+        self._schedule_update_check()
 
     def _tick(self):
         self._update_clock()
@@ -853,7 +1332,8 @@ class Dashboard:
 
 def main():
     os.chdir(Path(__file__).parent)
-    root = tk.Tk()
+    ctk.set_appearance_mode("dark")
+    root = ctk.CTk(fg_color=C["bg"])
     try:
         root.tk.call("tk", "scaling", 1.25)
     except Exception:

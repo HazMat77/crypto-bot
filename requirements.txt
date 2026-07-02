@@ -1,8 +1,10 @@
 # Core — required for the bot and watchdog to run at all
 python-kucoin==2.1.3
 pandas
+numpy
 requests
 beautifulsoup4
+websocket-client
 
 # Optional — used by additional exchanges, dashboards, and backtesting.
 # Not required just to run bot.py + watchdog.py against KuCoin.
@@ -10,3 +12,8 @@ ccxt
 matplotlib
 streamlit
 plotly
+
+# GUI — used by gui_dashboard.py for the desktop dashboard's rounded,
+# modern widget styling. Not required for paper/live trading or the
+# web dashboard (dashboard.py).
+customtkinter

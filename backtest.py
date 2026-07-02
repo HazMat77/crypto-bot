@@ -15,12 +15,16 @@ Usage:
 import argparse
 import logging
 import itertools
-import requests
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
+
+import bootstrap
+bootstrap.ensure_installed(optional=True)  # matplotlib for --plot, ccxt for --source ccxt
+
+import requests
+import pandas as pd
+import numpy as np
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
@@ -200,7 +204,31 @@ class Backtester:
                  take_profit_pct: float = 0.04,
                  trailing_stop_pct: float = 0.03,
                  max_hold_candles: int = 192,
-                 fee_rate: float = 0.001):
+                 fee_rate: float = 0.001,
+                 slippage_pct: float = 0.0,
+                 position_side: str = "long",
+                 funding_rate_pct_per_8h: float = 0.0,
+                 candle_hours: float = 0.25):
+        """
+        position_side: "long" (spot, or a 1x futures long — same P&L shape
+            as spot) or "short" (1x futures short, mirroring
+            futures_manager.py's live logic — profits as price FALLS,
+            stop/take-profit/trailing measured from the trough, not the
+            peak). Lets this backtester validate the futures shorting
+            strategy against history, not just spot mean-reversion.
+
+        slippage_pct: fraction applied against you on both entry and exit
+            fills (e.g. 0.0005 = 0.05% each way) — a market order never
+            fills at the exact last-seen close in reality; this keeps
+            backtest results from being unrealistically optimistic.
+
+        funding_rate_pct_per_8h: only meaningful for a futures position
+            (position_side="short", or "long" if you're modelling a
+            futures long rather than spot). Perpetual funding accrues
+            over the whole hold time regardless of price P&L — applied
+            pro-rated using candle_hours (real-world hours per row in
+            `df`, e.g. 0.25 for 15-minute candles).
+        """
         self.symbol            = symbol
         self.df                = df.copy()
         self.starting_usdt     = starting_usdt
@@ -214,19 +242,35 @@ class Backtester:
         self.trailing_stop_pct = trailing_stop_pct
         self.max_hold_candles  = max_hold_candles
         self.fee_rate          = fee_rate
+        self.slippage_pct      = slippage_pct
+        self.position_side     = position_side
+        self.funding_rate_pct_per_8h = funding_rate_pct_per_8h
+        self.candle_hours      = candle_hours
         self.trades            = []
         self.equity_curve      = []
+
+    def _fill_price(self, price: float, is_entry: bool) -> float:
+        """Applies slippage against you — worse fills on both entry and
+        exit, in the direction that always hurts, matching how slippage
+        actually behaves (never in your favour on average)."""
+        if self.slippage_pct <= 0:
+            return price
+        going_long = (self.position_side == "long")
+        # Entry: long buys pay UP, short sells fill DOWN. Exit: mirrored.
+        worse_up = (is_entry and going_long) or (not is_entry and not going_long)
+        return price * (1 + self.slippage_pct) if worse_up else price * (1 - self.slippage_pct)
 
     def run(self) -> dict:
         df = self.df
         df["rsi"] = calc_rsi(df["close"], self.rsi_period)
         df["ma"]  = calc_ma(df["close"],  self.ma_period)
+        is_short  = (self.position_side == "short")
 
         pool         = self.starting_usdt
         in_position  = False
-        buy_price    = 0.0
-        buy_spent    = 0.0
-        peak_price   = 0.0
+        buy_price    = 0.0     # entry price (long) or short entry price
+        buy_spent    = 0.0     # notional committed
+        peak_price   = 0.0     # peak (long) or trough (short) since entry
         entry_candle = 0
         min_idx      = max(self.rsi_period, self.ma_period) + 5
 
@@ -239,56 +283,90 @@ class Backtester:
             if pd.isna(rsi) or pd.isna(ma):
                 continue
 
-            unrealised = (pool + buy_spent * ((price - buy_price) / buy_price)
-                          if in_position else pool)
+            if in_position:
+                if is_short:
+                    unrealised_pct = (buy_price - price) / buy_price
+                else:
+                    unrealised_pct = (price - buy_price) / buy_price
+                unrealised = pool + buy_spent * unrealised_pct
+            else:
+                unrealised = pool
             self.equity_curve.append({"datetime": row["datetime"], "pool": unrealised})
 
             if in_position:
-                peak_price  = max(peak_price, price)
+                if is_short:
+                    peak_price = min(peak_price, price)   # "peak" = trough (most favourable) for a short
+                else:
+                    peak_price = max(peak_price, price)
                 hold_bars   = i - entry_candle
-                pct_change  = (price - buy_price) / buy_price
+                hold_hours  = hold_bars * self.candle_hours
+                pct_change  = ((buy_price - price) / buy_price if is_short
+                               else (price - buy_price) / buy_price)
                 exit_reason = None
 
                 if pct_change <= -self.stop_loss_pct:
                     exit_reason = "stop_loss"
                 elif pct_change >= self.take_profit_pct:
                     exit_reason = "take_profit"
-                elif peak_price > buy_price:
-                    if (price - peak_price) / peak_price <= -self.trailing_stop_pct:
+                elif (is_short and peak_price < buy_price) or (not is_short and peak_price > buy_price):
+                    drop_from_peak = (price - peak_price) / peak_price if peak_price > 0 else 0
+                    trail_move = -drop_from_peak if is_short else drop_from_peak
+                    if trail_move <= -self.trailing_stop_pct:
                         exit_reason = "trailing_stop"
-                if not exit_reason and rsi > self.rsi_sell and price < ma:
-                    exit_reason = "rsi_signal"
+                if not exit_reason:
+                    signal_flip = (rsi < self.rsi_buy and price > ma) if is_short \
+                                  else (rsi > self.rsi_sell and price < ma)
+                    if signal_flip:
+                        exit_reason = "rsi_signal"
                 if not exit_reason and hold_bars >= self.max_hold_candles:
                     exit_reason = "max_hold"
 
                 if exit_reason:
-                    proceeds  = round(buy_spent / buy_price * price, 6)
-                    fees      = round((buy_spent + proceeds) * self.fee_rate, 6)
-                    pnl_gross = proceeds - buy_spent
-                    pnl_net   = pnl_gross - fees
-                    pool     += proceeds
+                    exit_price = self._fill_price(price, is_entry=False)
+                    exit_pct   = ((buy_price - exit_price) / buy_price if is_short
+                                  else (exit_price - buy_price) / buy_price)
+                    pnl_gross  = buy_spent * exit_pct
+                    proceeds   = buy_spent + pnl_gross
+                    fees       = round((buy_spent + proceeds) * self.fee_rate, 6)
+                    funding    = 0.0
+                    if self.funding_rate_pct_per_8h:
+                        funding = buy_spent * self.funding_rate_pct_per_8h * (hold_hours / 8.0)
+                    pnl_net    = pnl_gross - fees - funding
+                    # Return the full committed notional plus net P&L — unlike the
+                    # previous version of this loop, which added back raw `proceeds`
+                    # without ever deducting the exit-side portion of `fees` from the
+                    # pool (only the entry-side fee was actually subtracted, at entry
+                    # below), silently understating total fee drag on the reported
+                    # final_pool/roi_pct even though the per-trade fee figures shown
+                    # in each trade dict were themselves correct.
+                    pool      += buy_spent + pnl_net
                     self.trades.append({
                         "symbol":       self.symbol,
                         "entry_time":   df.iloc[entry_candle]["datetime"],
                         "exit_time":    row["datetime"],
                         "buy_price":    buy_price,
-                        "sell_price":   price,
+                        "sell_price":   exit_price,
                         "pnl_gross":    pnl_gross,
                         "fees":         fees,
+                        "funding_cost": round(funding, 6),
                         "pnl_net":      pnl_net,
-                        "pct_change":   pct_change * 100,
+                        "pct_change":   exit_pct * 100,
                         "exit_reason":  exit_reason,
                         "hold_candles": hold_bars,
+                        "side":         self.position_side,
                     })
                     in_position = False
 
             else:
-                if rsi < self.rsi_buy and price > ma and pool >= self.trade_size:
-                    actual = min(self.trade_size, pool) * 0.95
+                entry_signal = (rsi > self.rsi_sell and price < ma) if is_short \
+                               else (rsi < self.rsi_buy and price > ma)
+                if entry_signal and pool >= self.trade_size:
+                    actual      = min(self.trade_size, pool) * 0.95
+                    entry_price = self._fill_price(price, is_entry=True)
                     pool       -= actual + actual * self.fee_rate
-                    buy_price   = price
+                    buy_price   = entry_price
                     buy_spent   = actual
-                    peak_price  = price
+                    peak_price  = entry_price
                     entry_candle = i
                     in_position  = True
 
