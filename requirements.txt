@@ -11,3 +11,8 @@ ccxt
 matplotlib
 streamlit
 plotly
+
+# GUI — used by gui_dashboard.py for the desktop dashboard's rounded,
+# modern widget styling. Not required for paper/live trading or the
+# web dashboard (dashboard.py).
+customtkinter

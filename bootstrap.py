@@ -12,8 +12,9 @@ explicitly rather than guessed.
 
 Usage — call this before importing anything that isn't in the stdlib:
     import bootstrap
-    bootstrap.ensure_installed()            # core packages only
+    bootstrap.ensure_installed()               # core packages only
     bootstrap.ensure_installed(optional=True)  # + ccxt/matplotlib/streamlit/plotly
+    bootstrap.ensure_installed(gui=True)       # + customtkinter
 """
 
 import importlib
@@ -27,6 +28,7 @@ _PIP_NAME = {
 
 _CORE     = ["kucoin", "pandas", "numpy", "requests", "bs4"]
 _OPTIONAL = ["ccxt", "matplotlib", "streamlit", "plotly"]
+_GUI      = ["customtkinter"]
 
 _checked = set()  # avoid re-checking the same set within one process
 
@@ -41,11 +43,11 @@ def _missing(names):
     return missing
 
 
-def ensure_installed(optional: bool = False) -> None:
+def ensure_installed(optional: bool = False, gui: bool = False) -> None:
     """Installs any missing packages via pip, quietly. Never raises —
     a failed auto-install just leaves the original ImportError to
     surface naturally wherever the missing package is actually used."""
-    names = tuple(_CORE + (_OPTIONAL if optional else []))
+    names = tuple(_CORE + (_OPTIONAL if optional else []) + (_GUI if gui else []))
     if names in _checked:
         return
 

@@ -1,8 +1,9 @@
 """
 CryptoTradingBot — Modern GUI Dashboard
 ==========================================
-Clean dark-themed desktop dashboard.
-Built with tkinter (included in Python — no extra install).
+Dark-themed desktop dashboard styled after software-suite control panels
+(top tab bar, rounded stat cards) rather than a typical sidebar app.
+Built on CustomTkinter (a rounded-corner skin over stdlib tkinter).
 
 Run: python gui_dashboard.py
 Or:  Double-click START_BOT.bat → [3] GUI Dashboard
@@ -10,12 +11,14 @@ Or:  Double-click START_BOT.bat → [3] GUI Dashboard
 
 import os, sys, glob, threading, importlib, re
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, messagebox
 from datetime import datetime, date
 from pathlib import Path
 
 import bootstrap
-bootstrap.ensure_installed()
+bootstrap.ensure_installed(gui=True)
+
+import customtkinter as ctk
 
 # ── Palette ────────────────────────────────────────────────────────────────
 C = {
@@ -63,55 +66,64 @@ def hex_to_rgb(h):
     return tuple(int(h[i:i+2], 16) for i in (0,2,4))
 
 
-class Card(tk.Frame):
+def _lighten(h, amount=30):
+    r, g, b = hex_to_rgb(h)
+    r = min(255, r+amount); g = min(255, g+amount); b = min(255, b+amount)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+class Card(ctk.CTkFrame):
+    """Rounded, bordered panel — the base 'tile' unit of the whole UI,
+    styled after control-panel software (AMD Adrenaline, NVIDIA app)
+    rather than a flat sidebar-app card."""
     def __init__(self, parent, title="", **kw):
-        super().__init__(parent, bg=C["surface"],
-                        highlightbackground=C["border"],
-                        highlightthickness=1, **kw)
+        super().__init__(parent, fg_color=C["surface"], border_color=C["border"],
+                        border_width=1, corner_radius=14, **kw)
         if title:
             tk.Label(self, text=title, bg=C["surface"], fg=C["muted"],
                     font=("Segoe UI", 9, "bold") if sys.platform=="win32" else ("SF Pro",9,"bold"),
-                    anchor="w").pack(fill="x", padx=12, pady=(10,2))
-            tk.Frame(self, height=1, bg=C["border"]).pack(fill="x", padx=12)
+                    anchor="w").pack(fill="x", padx=14, pady=(12,4))
+            ctk.CTkFrame(self, height=1, fg_color=C["border"], corner_radius=0
+                        ).pack(fill="x", padx=14)
 
 
-class MetricTile(tk.Frame):
-    def __init__(self, parent, label, **kw):
-        super().__init__(parent, bg=C["surface"],
-                        highlightbackground=C["border"],
-                        highlightthickness=1, **kw)
-        tk.Label(self, text=label, bg=C["surface"], fg=C["muted"],
+class MetricTile(ctk.CTkFrame):
+    """Stat card with a colored accent bar down the left edge — the
+    'gauge tile' look of a hardware control panel."""
+    def __init__(self, parent, label, accent=None, **kw):
+        super().__init__(parent, fg_color=C["surface"], border_color=C["border"],
+                        border_width=1, corner_radius=14, **kw)
+        self._accent = ctk.CTkFrame(self, width=4, fg_color=accent or C["border"],
+                                    corner_radius=0)
+        self._accent.pack(side="left", fill="y")
+        body = tk.Frame(self, bg=C["surface"])
+        body.pack(side="left", fill="both", expand=True)
+
+        tk.Label(body, text=label, bg=C["surface"], fg=C["muted"],
                 font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9)
                 ).pack(anchor="w", padx=12, pady=(10,2))
-        self.value_lbl = tk.Label(self, text="—", bg=C["surface"],
+        self.value_lbl = tk.Label(body, text="—", bg=C["surface"],
                                   fg=C["text"], font=FONT_NUM)
         self.value_lbl.pack(anchor="w", padx=12)
-        self.sub_lbl   = tk.Label(self, text="", bg=C["surface"],
+        self.sub_lbl   = tk.Label(body, text="", bg=C["surface"],
                                   fg=C["muted"],
                                   font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8))
         self.sub_lbl.pack(anchor="w", padx=12, pady=(0,10))
 
     def set(self, value, sub="", color=None):
-        self.value_lbl.configure(text=str(value),
-                                 fg=color or C["text"])
+        self.value_lbl.configure(text=str(value), fg=color or C["text"])
         self.sub_lbl.configure(text=sub)
+        self._accent.configure(fg_color=color or C["border"])
 
 
-class PillButton(tk.Label):
+class PillButton(ctk.CTkButton):
     def __init__(self, parent, text, command=None, color=C["blue"], **kw):
-        super().__init__(parent, text=text, bg=color, fg=C["white"],
+        super().__init__(parent, text=text, command=command,
+                        fg_color=color, hover_color=_lighten(color),
+                        text_color=C["white"], corner_radius=8, height=30,
                         font=("Segoe UI",9,"bold") if sys.platform=="win32" else ("SF Pro",9,"bold"),
-                        padx=14, pady=6, cursor="hand2", **kw)
-        if command:
-            self.bind("<Button-1>", lambda e: command())
-        self.bind("<Enter>", lambda e: self.configure(bg=self._lighten(color)))
-        self.bind("<Leave>", lambda e: self.configure(bg=color))
+                        **kw)
         self._base_color = color
-
-    def _lighten(self, h):
-        r,g,b = hex_to_rgb(h)
-        r = min(255, r+30); g = min(255, g+30); b = min(255, b+30)
-        return f"#{r:02x}{g:02x}{b:02x}"
 
 
 class Dashboard:
@@ -121,7 +133,6 @@ class Dashboard:
         root.title("CryptoTradingBot")
         root.geometry("1280x820")
         root.minsize(960, 640)
-        root.configure(bg=C["bg"])
         self._build()
         self._start_auto_refresh()
 
@@ -131,28 +142,27 @@ class Dashboard:
 
     def _build(self):
         self._build_topbar()
-        self._build_sidebar()
+        self._build_tabbar()
         self._build_main()
 
     def _build_topbar(self):
-        bar = tk.Frame(self.root, bg=C["surface"],
-                      highlightbackground=C["border"],
-                      highlightthickness=1, height=52)
+        bar = tk.Frame(self.root, bg=C["surface"], height=56,
+                      highlightbackground=C["border"], highlightthickness=0)
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
         # Logo + title
         tk.Label(bar, text="⬡", bg=C["surface"], fg=C["blue"],
-                font=("Segoe UI",18) if sys.platform=="win32" else ("SF Pro",18)
-                ).pack(side="left", padx=(16,4), pady=12)
+                font=("Segoe UI",20) if sys.platform=="win32" else ("SF Pro",20)
+                ).pack(side="left", padx=(18,6), pady=14)
         tk.Label(bar, text="CryptoTradingBot", bg=C["surface"],
-                fg=C["white"], font=FONT_TITLE).pack(side="left", pady=12)
+                fg=C["white"], font=FONT_TITLE).pack(side="left", pady=14)
 
         # Status badge
         self.status_badge = tk.Label(bar, text="● LOADING",
                                      bg=C["surface"], fg=C["yellow"],
                                      font=("Segoe UI",9,"bold") if sys.platform=="win32" else ("SF Pro",9,"bold"))
-        self.status_badge.pack(side="left", padx=16)
+        self.status_badge.pack(side="left", padx=18)
 
         self.clock_lbl = tk.Label(bar, text="", bg=C["surface"],
                                   fg=C["muted"],
@@ -161,26 +171,21 @@ class Dashboard:
 
         # Right controls
         ctrl = tk.Frame(bar, bg=C["surface"])
-        ctrl.pack(side="right", padx=12)
+        ctrl.pack(side="right", padx=14)
 
         PillButton(ctrl, "⏸  Pause",  self._pause,  C["yellow"]).pack(side="left", padx=3)
         PillButton(ctrl, "▶  Resume", self._resume, C["green"]).pack(side="left",  padx=3)
         PillButton(ctrl, "⟳  Refresh",self._refresh,C["blue"]).pack(side="left",  padx=3)
 
-    def _build_sidebar(self):
-        self.sidebar = tk.Frame(self.root, bg=C["surface"],
-                               highlightbackground=C["border"],
-                               highlightthickness=1, width=180)
-        self.sidebar.pack(side="left", fill="y")
-        self.sidebar.pack_propagate(False)
+    def _build_tabbar(self):
+        """Horizontal top tab strip (control-panel style) with an accent
+        underline on the active tab — replaces the old left sidebar nav."""
+        bar = tk.Frame(self.root, bg=C["surface"], height=46)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+        ctk.CTkFrame(self.root, height=1, fg_color=C["border"], corner_radius=0).pack(fill="x")
 
-        tk.Label(self.sidebar, text="NAVIGATION", bg=C["surface"],
-                fg=C["muted"],
-                font=("Segoe UI",8,"bold") if sys.platform=="win32" else ("SF Pro",8,"bold")
-                ).pack(anchor="w", padx=16, pady=(20,8))
-
-        self._pages   = {}
-        self._nav_btns = {}
+        self._nav_tabs = {}
         pages = [
             ("📊", "Overview"),
             ("💰", "Pools"),
@@ -191,31 +196,22 @@ class Dashboard:
             ("📁", "Logs"),
         ]
 
+        # Fixed (not expand/fill) column widths — CTkButton's canvas-based
+        # rendering doesn't negotiate pack()'s expand+fill evenly across
+        # many siblings, so a fixed width per tab is what actually renders
+        # reliably at every window size.
         for icon, name in pages:
-            btn = tk.Frame(self.sidebar, bg=C["surface"], cursor="hand2")
-            btn.pack(fill="x", padx=8, pady=1)
-            lbl = tk.Label(btn, text=f"  {icon}  {name}",
-                          bg=C["surface"], fg=C["muted"],
-                          font=("Segoe UI",10) if sys.platform=="win32" else ("SF Pro",10),
-                          anchor="w", padx=8, pady=8)
-            lbl.pack(fill="x")
-            self._nav_btns[name] = (btn, lbl)
-            for w in (btn, lbl):
-                w.bind("<Button-1>", lambda e, n=name: self._nav(n))
-                w.bind("<Enter>",    lambda e, b=btn, l=lbl: [
-                    b.configure(bg=C["hover"]), l.configure(bg=C["hover"])])
-                w.bind("<Leave>",    lambda e, n=name, b=btn, l=lbl: [
-                    b.configure(bg=C["surface"] if self._current_page != n else C["border"]),
-                    l.configure(bg=C["surface"] if self._current_page != n else C["border"])])
-
-        # Strategy info at bottom
-        tk.Frame(self.sidebar, height=1, bg=C["border"]).pack(fill="x", padx=16, pady=16)
-        self.engine_info = tk.Label(self.sidebar,
-                                    text="Engine: loading...",
-                                    bg=C["surface"], fg=C["muted"],
-                                    font=("Segoe UI",8) if sys.platform=="win32" else ("SF Pro",8),
-                                    justify="left", wraplength=150)
-        self.engine_info.pack(anchor="w", padx=16)
+            col = tk.Frame(bar, bg=C["surface"], width=150, height=40)
+            col.pack(side="left", padx=2, pady=(6,0))
+            col.pack_propagate(False)
+            btn = ctk.CTkButton(col, text=f"{icon}  {name}", command=lambda n=name: self._nav(n),
+                               fg_color="transparent", hover_color=C["hover"],
+                               text_color=C["muted"], corner_radius=8, height=32, width=146,
+                               font=("Segoe UI",10) if sys.platform=="win32" else ("SF Pro",10))
+            btn.pack()
+            underline = ctk.CTkFrame(col, height=3, fg_color="transparent", corner_radius=0)
+            underline.pack(fill="x", pady=(4,0))
+            self._nav_tabs[name] = (btn, underline)
 
     def _build_main(self):
         self.main = tk.Frame(self.root, bg=C["bg"])
@@ -282,17 +278,14 @@ class Dashboard:
         sig_card = Card(lower, title="RECENT SIGNALS")
         sig_card.pack(side="left", fill="both", expand=True, padx=(4,0))
 
-        self.sig_text = tk.Text(sig_card, bg=C["surface"], fg=C["text"],
-                               font=FONT_MONO, relief="flat", wrap="word",
-                               height=10, state="disabled")
-        self.sig_text.tag_configure("buy",     foreground=C["green"])
-        self.sig_text.tag_configure("sell",    foreground=C["red"])
-        self.sig_text.tag_configure("warn",    foreground=C["yellow"])
-        self.sig_text.tag_configure("engine",  foreground=C["purple"])
-        self.sig_text.tag_configure("normal",  foreground=C["muted"])
-        sb = ttk.Scrollbar(sig_card, command=self.sig_text.yview)
-        self.sig_text.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
+        self.sig_text = ctk.CTkTextbox(sig_card, fg_color=C["surface"], text_color=C["text"],
+                                      font=FONT_MONO, wrap="word", corner_radius=0,
+                                      border_width=0, height=220, state="disabled")
+        self.sig_text.tag_config("buy",     foreground=C["green"])
+        self.sig_text.tag_config("sell",    foreground=C["red"])
+        self.sig_text.tag_config("warn",    foreground=C["yellow"])
+        self.sig_text.tag_config("engine",  foreground=C["purple"])
+        self.sig_text.tag_config("normal",  foreground=C["muted"])
         self.sig_text.pack(fill="both", expand=True, padx=12, pady=8)
 
     def _build_pools(self):
@@ -405,8 +398,9 @@ class Dashboard:
     def _select_report_period(self, period):
         self._report_period = period
         for pr, b in self._report_btns.items():
-            b.configure(bg=C["blue"] if pr == period else C["border"])
-            b._base_color = C["blue"] if pr == period else C["border"]
+            color = C["blue"] if pr == period else C["border"]
+            b.configure(fg_color=color, hover_color=_lighten(color))
+            b._base_color = color
         self._load_report()
 
     def _load_report(self):
@@ -501,16 +495,13 @@ class Dashboard:
         card = Card(p)
         card.pack(fill="both", expand=True, padx=16, pady=8)
 
-        self.cfg_text = tk.Text(card, bg=C["surface"], fg=C["text"],
-                               font=FONT_MONO, relief="flat", wrap="none",
-                               state="disabled")
-        self.cfg_text.tag_configure("key",     foreground=C["blue"])
-        self.cfg_text.tag_configure("val",     foreground=C["green"])
-        self.cfg_text.tag_configure("section", foreground=C["yellow"])
-        self.cfg_text.tag_configure("comment", foreground=C["muted"])
-        vsb = ttk.Scrollbar(card, command=self.cfg_text.yview)
-        self.cfg_text.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
+        self.cfg_text = ctk.CTkTextbox(card, fg_color=C["surface"], text_color=C["text"],
+                                      font=FONT_MONO, wrap="none", corner_radius=0,
+                                      border_width=0, state="disabled")
+        self.cfg_text.tag_config("key",     foreground=C["blue"])
+        self.cfg_text.tag_config("val",     foreground=C["green"])
+        self.cfg_text.tag_config("section", foreground=C["yellow"])
+        self.cfg_text.tag_config("comment", foreground=C["muted"])
         self.cfg_text.pack(fill="both", expand=True, padx=12, pady=8)
 
     def _build_logs(self):
@@ -530,8 +521,11 @@ class Dashboard:
         tk.Label(ctrl, text="File:", bg=C["bg"], fg=C["muted"],
                 font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9)
                 ).pack(side="left")
-        cb = ttk.Combobox(ctrl, textvariable=self.log_var, values=logs,
-                         width=28, font=FONT_MONO)
+        cb = ctk.CTkComboBox(ctrl, variable=self.log_var, values=logs,
+                            width=280, height=30, corner_radius=8,
+                            fg_color=C["surface"], border_color=C["border"],
+                            button_color=C["border"], button_hover_color=C["hover"],
+                            dropdown_fg_color=C["surface"], font=FONT_MONO)
         cb.pack(side="left", padx=6)
         PillButton(ctrl, "Load",        self._load_log,  C["blue"]).pack(side="left",  padx=3)
         PillButton(ctrl, "Last 100",    self._tail_log,  C["purple"]).pack(side="left",padx=3)
@@ -539,21 +533,15 @@ class Dashboard:
 
         card = Card(p)
         card.pack(fill="both", expand=True, padx=16, pady=8)
-        self.log_text = tk.Text(card, bg="#090d12", fg="#00d084",
-                               font=FONT_MONO, relief="flat",
-                               wrap="none", state="disabled")
-        self.log_text.tag_configure("ERROR",   foreground=C["red"])
-        self.log_text.tag_configure("WARNING", foreground=C["yellow"])
-        self.log_text.tag_configure("BUY",     foreground=C["green"])
-        self.log_text.tag_configure("SELL",    foreground=C["orange"])
-        self.log_text.tag_configure("ENGINE",  foreground=C["purple"])
-        self.log_text.tag_configure("normal",  foreground="#00d084")
-        vsb = ttk.Scrollbar(card, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        hsb = ttk.Scrollbar(card, orient="horizontal", command=self.log_text.xview)
-        self.log_text.configure(xscrollcommand=hsb.set)
-        hsb.pack(side="bottom", fill="x")
+        self.log_text = ctk.CTkTextbox(card, fg_color="#090d12", text_color="#00d084",
+                                      font=FONT_MONO, wrap="none", corner_radius=0,
+                                      border_width=0, state="disabled")
+        self.log_text.tag_config("ERROR",   foreground=C["red"])
+        self.log_text.tag_config("WARNING", foreground=C["yellow"])
+        self.log_text.tag_config("BUY",     foreground=C["green"])
+        self.log_text.tag_config("SELL",    foreground=C["orange"])
+        self.log_text.tag_config("ENGINE",  foreground=C["purple"])
+        self.log_text.tag_config("normal",  foreground="#00d084")
         self.log_text.pack(fill="both", expand=True, padx=12, pady=8)
         self._auto_follow = False
 
@@ -562,11 +550,11 @@ class Dashboard:
     # ══════════════════════════════════════════════════════════════════════
 
     def _nav(self, page: str):
-        for name, (btn, lbl) in self._nav_btns.items():
+        for name, (btn, underline) in self._nav_tabs.items():
             active = (name == page)
-            bg = C["border"] if active else C["surface"]
-            fg = C["white"]  if active else C["muted"]
-            btn.configure(bg=bg); lbl.configure(bg=bg, fg=fg)
+            btn.configure(fg_color=C["hover"] if active else "transparent",
+                         text_color=C["white"] if active else C["muted"])
+            underline.configure(fg_color=C["blue"] if active else "transparent")
 
         for name, frame in self._page_frames.items():
             if name == page:
@@ -575,6 +563,11 @@ class Dashboard:
                 frame.pack_forget()
 
         self._current_page = page
+
+        if page == "Pools" and getattr(self, "_last_pool_bar_args", None):
+            self.root.after(50, lambda: self._draw_pool_bar(*self._last_pool_bar_args))
+        elif page == "News" and getattr(self, "_last_news_scores", None):
+            self.root.after(50, lambda: self._draw_news(self._last_news_scores))
 
     # ══════════════════════════════════════════════════════════════════════
     #  DATA LOADING
@@ -611,8 +604,11 @@ class Dashboard:
             self.root.after(0, lambda: self.t_aggr.set(f"${pool*aggr:.2f}",
                                                         f"{aggr*100:.0f}% aggressive",
                                                         C["orange"]))
-            # Update pool bar
-            self.root.after(100, lambda: self._draw_pool_bar(pool, pool*norm, pool*aggr, res))
+            # Update pool bar — cached so _nav() can redraw it once the
+            # canvas is actually visible/mapped (drawing while the Pools
+            # tab is hidden reports a bogus 1px width and draws nothing).
+            self._last_pool_bar_args = (pool, pool*norm, pool*aggr, res)
+            self.root.after(100, lambda: self._draw_pool_bar(*self._last_pool_bar_args))
 
             # Normal/aggressive detail tables
             n_data = [
@@ -714,8 +710,6 @@ class Dashboard:
                 ("Status",           "✅ Adapting" if total_trades >= 10 else "⏳ Gathering data"),
             ]
             self.root.after(0, lambda: self._fill_kv(self.engine_table, data))
-            self.root.after(0, lambda: self.engine_info.configure(
-                text=f"Engine\nWR: {avg_wr:.0%}\nEV: ${avg_ev:.4f}"))
         except Exception:
             pass
 
@@ -770,6 +764,7 @@ class Dashboard:
                          fill=C["bg"], font=("Segoe UI",9,"bold") if sys.platform=="win32" else ("SF Pro",9,"bold"))
 
     def _draw_news(self, scores: dict):
+        self._last_news_scores = scores  # so _nav() can redraw once visible/mapped
         c = self.news_canvas
         c.delete("all")
         w = c.winfo_width() or 900
@@ -963,7 +958,8 @@ class Dashboard:
 
 def main():
     os.chdir(Path(__file__).parent)
-    root = tk.Tk()
+    ctk.set_appearance_mode("dark")
+    root = ctk.CTk(fg_color=C["bg"])
     try:
         root.tk.call("tk", "scaling", 1.25)
     except Exception:
