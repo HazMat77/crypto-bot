@@ -33,11 +33,11 @@ if [ -z "$PYTHON_CMD" ]; then
 fi
 
 # ── Check dependencies ───────────────────────────────────────────────────────
-if ! $PYTHON_CMD -c "import kucoin" >/dev/null 2>&1; then
-    echo "  Dependencies not found. Installing now..."
+if ! $PYTHON_CMD -c "import kucoin, pandas, numpy, requests, bs4" >/dev/null 2>&1; then
+    echo "  Dependencies not found. Installing now from requirements.txt..."
     echo ""
-    $PYTHON_CMD -m pip install "python-kucoin==2.1.3" pandas requests --quiet 2>/dev/null \
-        || $PYTHON_CMD -m pip install "python-kucoin==2.1.3" pandas requests --quiet --break-system-packages
+    $PYTHON_CMD -m pip install -r requirements.txt --quiet 2>/dev/null \
+        || $PYTHON_CMD -m pip install -r requirements.txt --quiet --break-system-packages
     echo ""
 fi
 

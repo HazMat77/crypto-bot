@@ -1,6 +1,7 @@
 # Core — required for the bot and watchdog to run at all
 python-kucoin==2.1.3
 pandas
+numpy
 requests
 beautifulsoup4
 

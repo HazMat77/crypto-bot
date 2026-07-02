@@ -9,6 +9,7 @@ Available commands:
   /trades          — today's completed trades with P&L
   /daily           — today's full daily report
   /monthly         — this month's full summary
+  /yearly          — year-to-date summary (from the durable trade ledger)
   /coins           — which coins are currently being traded
   /on              — enable AI analyst (filters signals by confidence)
   /off             — disable AI analyst (trade on RSI/MA signals only)
@@ -111,6 +112,23 @@ class TelegramCommandHandler:
         except Exception as e:
             log.warning(f"[CMD] Send failed: {e}")
 
+    def _send_document(self, file_path: str, caption: str = ""):
+        """Send a file (CSV, PNG, etc.) to the authorized chat as a
+        Telegram document/photo attachment."""
+        try:
+            is_image = file_path.lower().endswith((".png", ".jpg", ".jpeg"))
+            endpoint = "sendPhoto" if is_image else "sendDocument"
+            field    = "photo" if is_image else "document"
+            with open(file_path, "rb") as f:
+                requests.post(
+                    f"{self.base_url}/{endpoint}",
+                    data={"chat_id": self.authorized_chat_id, "caption": caption},
+                    files={field: f},
+                    timeout=30,
+                )
+        except Exception as e:
+            log.warning(f"[CMD] Send document failed: {e}")
+
     # ══════════════════════════════════════════════════════════════════════
     #  COMMAND HANDLERS
     # ══════════════════════════════════════════════════════════════════════
@@ -126,11 +144,17 @@ class TelegramCommandHandler:
             "/daily     — Full daily P&L report (with ROI%)\n"
             "/weekly    — This week's summary (with ROI% + win rate)\n"
             "/monthly   — This month's summary (with ROI% + win rate)\n"
+            "/yearly    — Year-to-date summary (from the durable trade ledger)\n"
             "/coins     — Active trading coins\n"
             "/news      — Latest crypto headlines\n"
             "/score     — News sentiment scores\n"
             "/regime    — Current market regime\n"
             "/engine    — Strategy engine stats\n"
+            "/ai_stats  — Hybrid AI cost stats (fake vs real API usage)\n"
+            "/hybrid    — Hybrid allocator status (spot/futures vs staking gate)\n"
+            "/portfolio — Correlation heatmap + Value-at-Risk for active coins\n"
+            "/optimize  — Quick backtest + parameter suggestions (BTC-USDT)\n"
+            "/tax_export— Realized gains CSV (full trade history, FIFO cost basis)\n"
             "/diag      — Why aren't trades firing?\n"
             "/capacity  — Capital deployment ceiling vs actual\n"
             "/autoapply — Auto-apply settings + recent changes\n"
@@ -364,6 +388,17 @@ class TelegramCommandHandler:
             f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
+    def cmd_yearly(self):
+        try:
+            from reports import build_report, format_report_text
+            starting = getattr(self.config, "PAPER_STARTING_USDT", 100.0)
+            mode     = "📄 PAPER" if self.config.PAPER_TRADING else "💰 LIVE"
+            report   = build_report("yearly", starting_pool=starting)
+            self._send(format_report_text(report, mode_label=mode) +
+                      f"\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        except Exception as e:
+            self._send(f"⚠️ Could not build yearly report: {e}")
+
     def cmd_coins(self):
         lines = ""
         with self.active_coins_lock:
@@ -542,6 +577,226 @@ class TelegramCommandHandler:
             )
         except Exception as e:
             self._send(f"⚠️ Engine data unavailable: {e}")
+
+    def cmd_ai_stats(self):
+        """Hybrid AI cost stats — how many signals used free fake AI vs a
+        paid real API call, and the current hybrid/staking configuration."""
+        try:
+            from ai_analyst import get_hybrid_stats
+            cfg = self.config
+            stats = get_hybrid_stats()
+
+            if cfg.PAPER_TRADING:
+                mode_line = "📄 PAPER — always uses fake AI (hybrid mode has no effect here)"
+            elif getattr(cfg, "LIVE_FAKE_AI_ONLY", False):
+                mode_line = "💰 LIVE — LIVE_FAKE_AI_ONLY forces fake AI for every signal"
+            elif getattr(cfg, "AI_HYBRID_MODE", False):
+                mode_line = (f"💰 LIVE — HYBRID (real usage rate {cfg.AI_REAL_USAGE_RATE:.0%}, "
+                            f"escalate at {cfg.AI_MIN_CONFIDENCE_FOR_REAL}%+ confidence)")
+            else:
+                mode_line = "💰 LIVE — always real AI (hybrid mode disabled)"
+
+            self._send(
+                f"🤖 <b>Hybrid AI Stats</b>\n━━━━━━━━━━━━━━━━\n"
+                f"Mode: {mode_line}\n\n"
+                f"Fake AI calls: <b>{stats['fake']}</b>\n"
+                f"Real AI calls: <b>{stats['real']}</b>\n"
+                f"Real API usage: <b>{stats['real_pct']}%</b> of {stats['total']} total signals\n\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+        except Exception as e:
+            self._send(f"⚠️ AI stats unavailable: {e}")
+
+    def cmd_hybrid(self):
+        """Hybrid allocator status — whether spot/futures entries are
+        currently being gated against this exchange's staking yield."""
+        try:
+            cfg = self.config
+            enabled  = getattr(cfg, "HYBRID_OPTIMIZER_ENABLED", False)
+            staking  = getattr(cfg, "STAKING_ENABLED", False)
+            futures  = getattr(cfg, "FUTURES_ENABLED", False)
+            active   = enabled and staking
+
+            lines = ""
+            for ex_name in self.pool_usdt.keys():
+                ex_cfg = cfg.EXCHANGES.get(ex_name, {})
+                stake_on = staking and ex_cfg.get("staking_enabled", False)
+                fut_on   = futures and ex_cfg.get("futures_enabled", False)
+                lines += (f"  • {ex_name.upper()}: staking={'✅' if stake_on else '❌'} "
+                         f" futures={'✅' if fut_on else '❌'}\n")
+
+            self._send(
+                f"⚖️ <b>Hybrid Allocator</b>\n━━━━━━━━━━━━━━━━\n"
+                f"Gate active: <b>{'✅ YES — trades must beat staking yield' if active else '❌ no (staking not enabled, gate is a no-op)'}</b>\n"
+                f"Min edge over staking: <b>{getattr(cfg, 'HYBRID_MIN_EDGE_OVER_STAKING', 0.0):.2%}</b>\n\n"
+                f"<b>Per-exchange:</b>\n{lines or '  No exchanges configured'}\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+        except Exception as e:
+            self._send(f"⚠️ Hybrid status unavailable: {e}")
+
+    def cmd_portfolio(self):
+        """Correlation heatmap + Value-at-Risk for the currently active
+        coin list — runs in the background since it fetches price history
+        per coin and can take a little while."""
+        self._send("📊 Building portfolio correlation + risk report — this fetches "
+                  "price history per coin, give it a moment...")
+        threading.Thread(target=self._cmd_portfolio_worker, daemon=True).start()
+
+    def _cmd_portfolio_worker(self):
+        try:
+            from portfolio_correlation import CorrelationChecker
+            from portfolio_risk import PortfolioRiskAnalyzer
+
+            with self.active_coins_lock:
+                symbols = []
+                for coins in self.active_coins.values():
+                    for s in coins:
+                        if s not in symbols:
+                            symbols.append(s)
+            symbols = symbols[:15]   # cap — each coin is a separate price-history fetch
+
+            if len(symbols) < 2:
+                self._send("⚠️ Need at least 2 active coins to check correlation.")
+                return
+
+            checker = CorrelationChecker(lookback_days=30)
+            checker.check(symbols)
+            if checker.corr_matrix is None or checker.corr_matrix.empty:
+                self._send("⚠️ Could not fetch enough price history for a correlation report.")
+                return
+
+            coins = list(checker.corr_matrix.columns)
+            n     = len(coins)
+            pairs = [(i, j) for i in range(n) for j in range(n) if i < j]
+            avg_corr = sum(abs(checker.corr_matrix.iloc[i, j]) for i, j in pairs) / len(pairs) if pairs else 0
+            verdict  = ("✅ Well diversified" if avg_corr < 0.5
+                       else "⚠️ Moderately correlated" if avg_corr < 0.75
+                       else "❌ Highly correlated — add uncorrelated coins")
+
+            high_pairs = sorted(
+                ((f"{coins[i]}/{coins[j]}", checker.corr_matrix.iloc[i, j]) for i, j in pairs
+                 if checker.corr_matrix.iloc[i, j] >= 0.80),
+                key=lambda x: -x[1]
+            )[:6]
+            high_lines = "\n".join(f"    {p} = {v:.2f}" for p, v in high_pairs) or "    (none)"
+
+            msg = (
+                f"📊 <b>Portfolio Correlation Report</b>\n━━━━━━━━━━━━━━━━\n"
+                f"Coins checked: <b>{n}</b>  |  Avg correlation: <b>{avg_corr:.2f}</b>\n"
+                f"{verdict}\n\n"
+                f"⚠️ High correlation pairs (≥0.80):\n{high_lines}\n"
+            )
+
+            # Value at Risk — equal-weighted across the checked coins using
+            # total pool value as a rough stand-in for portfolio size (this
+            # bot doesn't track live per-coin USD exposure outside an open
+            # position, so this is a "if fully deployed evenly" estimate,
+            # not a snapshot of actual current holdings).
+            try:
+                total_pool = sum(self.pool_usdt.values())
+                weights    = {c: 1.0 for c in coins}
+                risk       = PortfolioRiskAnalyzer(checker)
+                var        = risk.value_at_risk(weights, total_pool, 0.95, "historical")
+                msg += (f"\n💰 <b>Est. 1-day VaR (95%, equal-weighted)</b>\n"
+                       f"  ${var['var_usdt']:.2f} ({var['var_pct']:.1f}% of ${total_pool:.2f} pool)\n")
+            except Exception as e:
+                log.debug(f"[CMD] Portfolio VaR skipped: {e}")
+
+            msg += f"\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            self._send(msg)
+
+            # Best-effort heatmap image — matplotlib is an optional dep
+            # (see requirements.txt); silently skip the image if missing.
+            try:
+                checker.plot()
+                import os
+                if os.path.exists("correlation_matrix.png"):
+                    self._send_document("correlation_matrix.png", caption="Correlation heatmap")
+            except Exception as e:
+                log.debug(f"[CMD] Correlation heatmap image skipped: {e}")
+
+        except Exception as e:
+            self._send(f"⚠️ Portfolio report failed: {e}")
+
+    def cmd_optimize(self):
+        """Runs a quick backtest + grid search on BTC-USDT and suggests
+        settings — runs in the background, can take a minute or two."""
+        self._send("🔍 Running a quick backtest + parameter search — this can take "
+                  "a minute or two, I'll message you when it's done...")
+        threading.Thread(target=self._cmd_optimize_worker, daemon=True).start()
+
+    def _cmd_optimize_worker(self):
+        try:
+            from strategy_optimizer import run_quick_backtest
+            result = run_quick_backtest(symbol="BTC-USDT", days=60)
+
+            if "error" in result:
+                self._send(f"⚠️ Optimize failed: {result['error']}")
+                return
+
+            cur = result["current_backtest"]
+            cs  = result["current_settings"]
+            msg = (
+                f"🔍 <b>Quick Optimize — BTC-USDT, 60d</b>\n━━━━━━━━━━━━━━━━\n"
+                f"<b>Current settings:</b> RSI {cs['rsi_buy']}/{cs['rsi_sell']} "
+                f"MA={cs['ma_period']} SL={cs['stop_loss_pct']*100:.0f}% TP={cs['take_profit_pct']*100:.0f}%\n"
+                f"  → WR={cur['win_rate']}% ROI={cur['roi_pct']:+.1f}% "
+                f"DD={cur['max_drawdown']:.1f}% ({cur['total_trades']} trades)\n\n"
+            )
+
+            if result.get("suggested_settings"):
+                sp = result["suggested_settings"]
+                sb = result["suggested_backtest"]
+                msg += (
+                    f"<b>Suggested settings (walk-forward tested):</b>\n"
+                    f"  RSI {sp['rsi_buy']}/{sp['rsi_sell']} MA={sp['ma_period']} "
+                    f"SL={sp['stop_loss_pct']*100:.0f}% TP={sp['take_profit_pct']*100:.0f}%\n"
+                    f"  → WR={sb['win_rate']}% ROI={sb['roi_pct']:+.1f}% DD={sb['max_drawdown']:.1f}%\n\n"
+                    f"This is a suggestion from historical data, not an automatic change — "
+                    f"nothing in config.py has been modified. Apply manually if it looks right."
+                )
+            else:
+                msg += "No better parameter set found in this search — current settings look reasonable."
+
+            msg += f"\n\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            self._send(msg)
+
+        except Exception as e:
+            self._send(f"⚠️ Optimize failed: {e}")
+
+    def cmd_tax_export(self):
+        """Exports the full realized-gains history (from the durable
+        trade ledger, not just today/this month) as a CSV and sends it."""
+        try:
+            from tax_export import export_tax_csv
+            import os
+
+            os.makedirs("logs", exist_ok=True)
+            path = os.path.join("logs", f"tax_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            summary = export_tax_csv(path)
+
+            if summary["rows"] == 0:
+                self._send("📄 No completed trades in the ledger yet — nothing to export.\n"
+                          "(The ledger only started recording once this update was installed — "
+                          "trades from before that aren't in it.)")
+                return
+
+            self._send(
+                f"📄 <b>Tax Export</b>\n━━━━━━━━━━━━━━━━\n"
+                f"{summary['rows']} closed trades exported.\n"
+                f"Total realized gain/loss: <b>${summary['total_gain_loss']:.2f}</b>\n"
+                f"  Short-term: ${summary['short_term_total']:.2f}\n"
+                f"  Long-term:  ${summary['long_term_total']:.2f}\n"
+                + (f"  Unclassified (missing dates): ${summary['unclassified_total']:.2f}\n"
+                   if summary["unclassified_total"] else "") +
+                f"\n⚠️ Not tax advice — verify against your jurisdiction's rules "
+                f"and a tax professional before filing.\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            self._send_document(path, caption="Realized gains — full trade history")
+        except Exception as e:
+            self._send(f"⚠️ Tax export failed: {e}")
 
     def cmd_capacity(self):
         """Shows max possible capital deployment vs current pool size."""
@@ -1355,11 +1610,17 @@ class TelegramCommandHandler:
         "/daily":   "cmd_daily",
         "/weekly":  "cmd_weekly",
         "/monthly": "cmd_monthly",
+        "/yearly":  "cmd_yearly",
         "/coins":   "cmd_coins",
         "/news":    "cmd_news",
         "/score":   "cmd_score",
         "/regime":  "cmd_regime",
         "/engine":  "cmd_engine",
+        "/ai_stats":"cmd_ai_stats",
+        "/hybrid":  "cmd_hybrid",
+        "/portfolio":"cmd_portfolio",
+        "/optimize":"cmd_optimize",
+        "/tax_export":"cmd_tax_export",
         "/diag":    "cmd_diag",
         "/capacity":"cmd_capacity",
         "/autoapply":"cmd_autoapply",

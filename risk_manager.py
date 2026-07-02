@@ -57,6 +57,17 @@ def on_sell(exchange_name: str, symbol: str):
         position_peak_price.pop(key, None)
 
 
+def get_entry_time(exchange_name: str, symbol: str):
+    """Read-only lookup of when a position was opened — used by
+    tax_export.py (via trade_ledger.py) to record the acquisition date
+    for cost-basis reporting. Must be called BEFORE on_sell() clears the
+    entry for this position, or it'll return None. Returns a
+    datetime.datetime, or None if no entry is tracked (e.g. a position
+    the self-checker adopted after a crash, with no real entry time known)."""
+    with risk_lock:
+        return position_entry_time.get((exchange_name, symbol))
+
+
 def update_peak(exchange_name: str, symbol: str, current_price: float):
     """Update the trailing stop peak price if current price is higher."""
     key = (exchange_name, symbol)

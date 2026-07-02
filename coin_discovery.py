@@ -357,7 +357,12 @@ def get_top_coins(exchange_name: str, max_coins: int,
 
     # ── Correlation-aware selection ─────────────────────────────────────────
     if use_correlation_filter and len(ranked) > max_coins:
-        top = _select_with_correlation_filter(ranked, max_coins)
+        try:
+            import config as _cfg
+            correlation_cap = getattr(_cfg, "CORRELATION_CAP", 0.80)
+        except ImportError:
+            correlation_cap = 0.80
+        top = _select_with_correlation_filter(ranked, max_coins, correlation_cap)
     else:
         top = ranked[:max_coins]
 

@@ -133,6 +133,76 @@ class BaseExchange:
             f"isn't holding an orphaned position until this is implemented."
         )
 
+    # ── FUTURES / PERPETUALS (opt-in — see config.FUTURES_ENABLED) ─────────
+    #
+    # Every method below defaults to "not supported" so that an exchange
+    # adapter which hasn't implemented futures fails LOUDLY and immediately
+    # (futures_manager.py checks futures_supported() before ever calling
+    # these) rather than silently no-opping on what would be a real-money
+    # short/long order. Leverage is intentionally hard-capped at 1x across
+    # this entire bot (see config.MAX_LEVERAGE) — these methods exist to
+    # let the bot go SHORT (something spot can never do) and to hedge,
+    # not to amplify position size. No adapter here should ever be called
+    # with a leverage value other than 1.
+    def futures_supported(self) -> bool:
+        return False
+
+    def set_leverage(self, symbol: str, leverage: int = 1) -> None:
+        raise NotImplementedError(f"Futures not implemented for '{self.name}'")
+
+    def get_futures_price(self, symbol: str) -> float:
+        """Defaults to the spot price. Override if the exchange quotes
+        futures/perp prices separately from spot (they usually differ
+        slightly due to funding-driven basis)."""
+        return self.get_price(symbol)
+
+    def open_futures_long(self, symbol: str, usdt_amount: float) -> dict:
+        raise NotImplementedError(f"Futures not implemented for '{self.name}'")
+
+    def open_futures_short(self, symbol: str, usdt_amount: float) -> dict:
+        raise NotImplementedError(f"Futures not implemented for '{self.name}'")
+
+    def close_futures_position(self, symbol: str) -> dict:
+        """Closes whatever open futures position exists on this symbol
+        (long or short), fully, at market."""
+        raise NotImplementedError(f"Futures not implemented for '{self.name}'")
+
+    def get_futures_position(self, symbol: str) -> dict:
+        """Returns {"side": "long"|"short"|"none", "size": float (base
+        units), "entry_price": float, "unrealized_pnl": float}."""
+        raise NotImplementedError(f"Futures not implemented for '{self.name}'")
+
+    def get_funding_rate(self, symbol: str) -> float:
+        """Returns the current/most recent funding rate as a fraction
+        (e.g. 0.0001 = 0.01%). Positive = longs pay shorts."""
+        raise NotImplementedError(f"Futures not implemented for '{self.name}'")
+
+    # ── STAKING / FLEXIBLE EARN (opt-in — see config.STAKING_ENABLED) ──────
+    #
+    # Scoped deliberately narrow: FLEXIBLE products only (no fixed-term
+    # lockups). A trading bot needs to be able to unstake on short notice
+    # when a signal wants that capital back — a locked staking term would
+    # silently turn "the bot decided to trade" into "the bot can't,
+    # because the money is locked for 30/60/90 days." Every implementation
+    # below must stay flexible-only for that reason.
+    def staking_supported(self) -> bool:
+        return False
+
+    def get_staking_apr(self, coin: str) -> float:
+        """Returns the current flexible-staking APR for `coin` as a
+        fraction (e.g. 0.05 = 5% APR). Returns 0.0 if no flexible
+        product exists for that coin on this exchange."""
+        raise NotImplementedError(f"Staking not implemented for '{self.name}'")
+
+    def stake_flexible(self, coin: str, amount: float) -> dict:
+        raise NotImplementedError(f"Staking not implemented for '{self.name}'")
+
+    def unstake_flexible(self, coin: str, amount: float) -> dict:
+        raise NotImplementedError(f"Staking not implemented for '{self.name}'")
+
+    def get_staked_balance(self, coin: str) -> float:
+        raise NotImplementedError(f"Staking not implemented for '{self.name}'")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  KUCOIN
@@ -291,6 +361,182 @@ class KuCoinExchange(BaseExchange):
                     balances[currency] = balances.get(currency, 0.0) + bal
         return balances
 
+    # ── FUTURES (KuCoin Futures — separate API base, same KC-API-* signing
+    #   scheme as spot) ────────────────────────────────────────────────────
+    #
+    # IMPORTANT: KuCoin Futures contracts are quoted in fixed-size LOTS,
+    # not raw coin quantity (e.g. one XBTUSDTM contract ≈ $1 notional of
+    # BTC, not 1 BTC) — the multiplier varies per contract and is returned
+    # by GET /api/v1/contracts/{symbol}. This adapter fetches it live for
+    # every order rather than hardcoding per-symbol multipliers, since
+    # KuCoin does periodically change them. Verify a contract's multiplier
+    # against KuCoin's live "Detail" endpoint before trading it for real —
+    # an incorrect assumed multiplier would size the position wrong.
+    FUTURES_BASE = "https://api-futures.kucoin.com"
+
+    def futures_supported(self) -> bool:
+        return True
+
+    def _futures_symbol(self, symbol: str) -> str:
+        # config uses "BTC-USDT" -> KuCoin USDT-margined perpetual "XBTUSDTM"
+        coin = symbol.split("-")[0]
+        coin = "XBT" if coin == "BTC" else coin
+        return f"{coin}USDTM"
+
+    def _futures_sign(self, method, path, body=""):
+        ts  = str(int(time.time() * 1000))
+        msg = (ts + method.upper() + path + body).encode()
+        sig = base64.b64encode(
+            hmac.new(self.credentials["api_secret"].encode(), msg, hashlib.sha256).digest()
+        ).decode()
+        passphrase = base64.b64encode(
+            hmac.new(self.credentials["api_secret"].encode(),
+                     self.credentials["passphrase"].encode(), hashlib.sha256).digest()
+        ).decode()
+        return {
+            "KC-API-KEY":        self.credentials["api_key"],
+            "KC-API-SIGN":       sig,
+            "KC-API-TIMESTAMP":  ts,
+            "KC-API-PASSPHRASE": passphrase,
+            "KC-API-KEY-VERSION": "2",
+            "Content-Type":      "application/json",
+        }
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def _contract_detail(self, fsym: str) -> dict:
+        resp = requests.get(f"{self.FUTURES_BASE}/api/v1/contracts/{fsym}", timeout=10)
+        data = resp.json()
+        if data.get("code") != "200000":
+            raise ValueError(f"KuCoin Futures: contract detail failed for {fsym}: {data}")
+        return data["data"]
+
+    def set_leverage(self, symbol, leverage=1):
+        # KuCoin Futures sets leverage per-order (see open_futures_long/short
+        # below) rather than via a standalone endpoint — nothing to do here,
+        # kept as a no-op so callers can treat every adapter uniformly.
+        pass
+
+    def get_futures_price(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        resp = requests.get(f"{self.FUTURES_BASE}/api/v1/ticker",
+                            params={"symbol": fsym}, timeout=10)
+        return float(resp.json()["data"]["price"])
+
+    def _futures_market_order(self, symbol, usdt_amount, side):
+        import json
+        fsym    = self._futures_symbol(symbol)
+        detail  = self._contract_detail(fsym)
+        multiplier = float(detail["multiplier"])
+        price   = self.get_futures_price(symbol)
+        lots    = max(1, round(usdt_amount / (price * multiplier)))
+        path    = "/api/v1/orders"
+        body    = json.dumps({
+            "clientOid": f"bot_{int(time.time()*1000)}",
+            "side": side, "symbol": fsym, "type": "market",
+            "size": lots, "leverage": "1",
+        })
+        resp = requests.post(f"{self.FUTURES_BASE}{path}", data=body, timeout=10,
+                             headers=self._futures_sign("POST", path, body))
+        return resp.json()
+
+    def open_futures_long(self, symbol, usdt_amount):
+        return self._futures_market_order(symbol, usdt_amount, "buy")
+
+    def open_futures_short(self, symbol, usdt_amount):
+        return self._futures_market_order(symbol, usdt_amount, "sell")
+
+    def close_futures_position(self, symbol):
+        import json
+        pos = self.get_futures_position(symbol)
+        if pos["side"] == "none" or pos["size"] == 0:
+            return {"msg": "no open position"}
+        fsym = self._futures_symbol(symbol)
+        side = "sell" if pos["side"] == "long" else "buy"
+        path = "/api/v1/orders"
+        body = json.dumps({
+            "clientOid": f"bot_{int(time.time()*1000)}",
+            "side": side, "symbol": fsym, "type": "market",
+            "size": abs(int(pos["size"])), "closeOrder": True,
+        })
+        resp = requests.post(f"{self.FUTURES_BASE}{path}", data=body, timeout=10,
+                             headers=self._futures_sign("POST", path, body))
+        return resp.json()
+
+    def get_futures_position(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        path = f"/api/v1/position?symbol={fsym}"
+        resp = requests.get(f"{self.FUTURES_BASE}{path}", timeout=10,
+                            headers=self._futures_sign("GET", path))
+        data = resp.json().get("data") or {}
+        size = float(data.get("currentQty", 0) or 0)
+        if size == 0:
+            return {"side": "none", "size": 0.0, "entry_price": 0.0, "unrealized_pnl": 0.0}
+        return {
+            "side": "long" if size > 0 else "short",
+            "size": abs(size),
+            "entry_price": float(data.get("avgEntryPrice", 0) or 0),
+            "unrealized_pnl": float(data.get("unrealisedPnl", 0) or 0),
+        }
+
+    def get_funding_rate(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        resp = requests.get(f"{self.FUTURES_BASE}/api/v1/funding-rate/{fsym}/current", timeout=10)
+        data = resp.json().get("data") or {}
+        return float(data.get("value", 0) or 0)
+
+    # ── STAKING (KuCoin Earn v3 — flexible products only) ──────────────────
+    def staking_supported(self) -> bool:
+        return True
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_staking_apr(self, coin):
+        path = f"/api/v3/earn/promotion/products?currency={coin}"
+        resp = requests.get(f"https://api.kucoin.com{path}", timeout=10,
+                            headers=self._futures_sign("GET", path))
+        items = resp.json().get("data", {}).get("items", [])
+        # Only flexible (non-fixed-term) products are eligible — a bot must
+        # be able to redeem on short notice when a trade signal wants the
+        # capital back.
+        flexible = [i for i in items if str(i.get("redeemPeriod", 0)) in ("0", "")]
+        if not flexible:
+            return 0.0
+        return max(float(i.get("apr", 0) or 0) for i in flexible) / 100.0
+
+    def _flexible_product_id(self, coin):
+        path = f"/api/v3/earn/promotion/products?currency={coin}"
+        resp = requests.get(f"https://api.kucoin.com{path}", timeout=10,
+                            headers=self._futures_sign("GET", path))
+        items = resp.json().get("data", {}).get("items", [])
+        flexible = [i for i in items if str(i.get("redeemPeriod", 0)) in ("0", "")]
+        if not flexible:
+            raise ValueError(f"KuCoin: no flexible earn product for {coin}")
+        return max(flexible, key=lambda i: float(i.get("apr", 0) or 0))["productId"]
+
+    def stake_flexible(self, coin, amount):
+        import json
+        product_id = self._flexible_product_id(coin)
+        path = "/api/v3/earn/orders"
+        body = json.dumps({"productId": product_id, "amount": str(amount)})
+        resp = requests.post(f"https://api.kucoin.com{path}", data=body, timeout=10,
+                             headers=self._futures_sign("POST", path, body))
+        return resp.json()
+
+    def unstake_flexible(self, coin, amount):
+        import json
+        product_id = self._flexible_product_id(coin)
+        path = "/api/v3/earn/redeem"
+        body = json.dumps({"productId": product_id, "amount": str(amount), "fromType": "MAIN"})
+        resp = requests.post(f"https://api.kucoin.com{path}", data=body, timeout=10,
+                             headers=self._futures_sign("POST", path, body))
+        return resp.json()
+
+    def get_staked_balance(self, coin):
+        path = f"/api/v3/earn/hold-assets?currency={coin}"
+        resp = requests.get(f"https://api.kucoin.com{path}", timeout=10,
+                            headers=self._futures_sign("GET", path))
+        items = resp.json().get("data", {}).get("items", [])
+        return sum(float(i.get("holdAmount", 0) or 0) for i in items)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  BINANCE
@@ -365,6 +611,126 @@ class BinanceExchange(BaseExchange):
         bals   = resp.json().get("balances", [])
         asset  = next((b for b in bals if b["asset"] == coin), None)
         return float(asset["free"]) if asset else 0.0
+
+    # ── FUTURES (Binance USDT-M — fapi.binance.com, one-way position mode
+    #   assumed; same HMAC-SHA256 signing as spot) ───────────────────────────
+    FAPI_BASE = "https://fapi.binance.com"
+
+    def futures_supported(self) -> bool:
+        return True
+
+    def set_leverage(self, symbol, leverage=1):
+        sym    = self.normalize_symbol(symbol)
+        params = self._sign({"symbol": sym, "leverage": leverage, "timestamp": int(time.time()*1000)})
+        requests.post(f"{self.FAPI_BASE}/fapi/v1/leverage", params=params,
+                      headers=self._headers(), timeout=10)
+
+    def get_futures_price(self, symbol):
+        sym  = self.normalize_symbol(symbol)
+        resp = requests.get(f"{self.FAPI_BASE}/fapi/v1/ticker/price", params={"symbol": sym}, timeout=10)
+        return float(resp.json()["price"])
+
+    def _futures_market_order(self, symbol, usdt_amount, side, reduce_only=False):
+        sym   = self.normalize_symbol(symbol)
+        price = self.get_futures_price(symbol)
+        qty   = round(usdt_amount / price, 3)
+        params = {"symbol": sym, "side": side, "type": "MARKET", "quantity": qty,
+                  "timestamp": int(time.time()*1000)}
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        params = self._sign(params)
+        resp = requests.post(f"{self.FAPI_BASE}/fapi/v1/order", params=params,
+                             headers=self._headers(), timeout=10)
+        return resp.json()
+
+    def open_futures_long(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "BUY")
+
+    def open_futures_short(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "SELL")
+
+    def close_futures_position(self, symbol):
+        pos = self.get_futures_position(symbol)
+        if pos["side"] == "none":
+            return {"msg": "no open position"}
+        sym   = self.normalize_symbol(symbol)
+        side  = "SELL" if pos["side"] == "long" else "BUY"
+        params = self._sign({"symbol": sym, "side": side, "type": "MARKET",
+                             "quantity": pos["size"], "reduceOnly": "true",
+                             "timestamp": int(time.time()*1000)})
+        resp = requests.post(f"{self.FAPI_BASE}/fapi/v1/order", params=params,
+                             headers=self._headers(), timeout=10)
+        return resp.json()
+
+    def get_futures_position(self, symbol):
+        sym    = self.normalize_symbol(symbol)
+        params = self._sign({"symbol": sym, "timestamp": int(time.time()*1000)})
+        resp   = requests.get(f"{self.FAPI_BASE}/fapi/v2/positionRisk", params=params,
+                              headers=self._headers(), timeout=10)
+        rows = resp.json()
+        row  = rows[0] if isinstance(rows, list) and rows else {}
+        amt  = float(row.get("positionAmt", 0) or 0)
+        if amt == 0:
+            return {"side": "none", "size": 0.0, "entry_price": 0.0, "unrealized_pnl": 0.0}
+        return {
+            "side": "long" if amt > 0 else "short",
+            "size": abs(amt),
+            "entry_price": float(row.get("entryPrice", 0) or 0),
+            "unrealized_pnl": float(row.get("unRealizedProfit", 0) or 0),
+        }
+
+    def get_funding_rate(self, symbol):
+        sym  = self.normalize_symbol(symbol)
+        resp = requests.get(f"{self.FAPI_BASE}/fapi/v1/premiumIndex", params={"symbol": sym}, timeout=10)
+        return float(resp.json().get("lastFundingRate", 0) or 0)
+
+    # ── STAKING (Binance Simple Earn — flexible products only) ─────────────
+    def staking_supported(self) -> bool:
+        return True
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_staking_apr(self, coin):
+        params = self._sign({"asset": coin, "timestamp": int(time.time()*1000)})
+        resp   = requests.get(f"{self.BASE}/sapi/v1/simple-earn/flexible/list", params=params,
+                              headers=self._headers(), timeout=10)
+        rows = resp.json().get("rows", [])
+        if not rows:
+            return 0.0
+        return float(rows[0].get("latestAnnualPercentageRate", 0) or 0)
+
+    def _flexible_product_id(self, coin):
+        params = self._sign({"asset": coin, "timestamp": int(time.time()*1000)})
+        resp   = requests.get(f"{self.BASE}/sapi/v1/simple-earn/flexible/list", params=params,
+                              headers=self._headers(), timeout=10)
+        rows = resp.json().get("rows", [])
+        if not rows:
+            raise ValueError(f"Binance: no flexible earn product for {coin}")
+        return rows[0]["productId"]
+
+    def stake_flexible(self, coin, amount):
+        product_id = self._flexible_product_id(coin)
+        params = self._sign({"productId": product_id, "amount": round(amount, 8),
+                             "timestamp": int(time.time()*1000)})
+        resp = requests.post(f"{self.BASE}/sapi/v1/simple-earn/flexible/subscribe", params=params,
+                             headers=self._headers(), timeout=10)
+        return resp.json()
+
+    def unstake_flexible(self, coin, amount):
+        product_id = self._flexible_product_id(coin)
+        params = self._sign({"productId": product_id, "amount": round(amount, 8),
+                             "redeemType": "FAST", "timestamp": int(time.time()*1000)})
+        resp = requests.post(f"{self.BASE}/sapi/v1/simple-earn/flexible/redeem", params=params,
+                             headers=self._headers(), timeout=10)
+        return resp.json()
+
+    def get_staked_balance(self, coin):
+        params = self._sign({"asset": coin, "timestamp": int(time.time()*1000)})
+        resp   = requests.get(f"{self.BASE}/sapi/v1/simple-earn/flexible/position", params=params,
+                              headers=self._headers(), timeout=10)
+        rows = resp.json().get("rows", [])
+        return sum(float(r.get("totalAmount", 0) or 0) for r in rows)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -510,6 +876,200 @@ class KrakenExchange(BaseExchange):
         kraken_coin = self.LEGACY_COIN_TO_KRAKEN.get(coin, coin)
         return float(bals.get(kraken_coin, bals.get(f"X{kraken_coin}", 0)))
 
+    # ── FUTURES (Kraken Futures) ─────────────────────────────────────────
+    #
+    # IMPORTANT — read before enabling: Kraken Futures is a COMPLETELY
+    # SEPARATE product from Kraken spot, on a different domain
+    # (futures.kraken.com) with its own API key system generated at
+    # https://futures.kraken.com/settings/api — your regular Kraken spot
+    # API key/secret will NOT authenticate here. This adapter looks for
+    # optional "futures_api_key" / "futures_api_secret" entries in this
+    # exchange's config.py credentials dict; if they're missing, futures
+    # calls raise clearly rather than silently trying (and failing) with
+    # the wrong credentials. The signing scheme also differs from spot
+    # Kraken's (HMAC-SHA512 over sha256(postData+nonce+path), no /0/
+    # prefix) — implemented here from Kraken's published Futures API docs
+    # but NOT verified against a live account in this session. Test with
+    # a trivial order on Kraken Futures' free demo environment
+    # (demo-futures.kraken.com) before trusting this with real funds.
+    FUTURES_BASE = "https://futures.kraken.com"
+
+    def futures_supported(self) -> bool:
+        # Checks for actual non-empty values, not just key presence — config.py
+        # always adds these two keys (via getattr(..., "")) even when
+        # bot_secrets.py has nothing filled in, so a presence-only check would
+        # incorrectly report "supported" with blank credentials and let
+        # futures_manager.py attempt real, doomed-to-fail API calls in live
+        # mode instead of cleanly staying off.
+        return bool(self.credentials.get("futures_api_key")) and bool(self.credentials.get("futures_api_secret"))
+
+    def _require_futures_creds(self):
+        if not self.futures_supported():
+            raise NotImplementedError(
+                "Kraken Futures requires separate credentials — add "
+                "'futures_api_key' and 'futures_api_secret' (from "
+                "https://futures.kraken.com/settings/api) to this exchange's "
+                "entry in config.EXCHANGES['kraken']."
+            )
+
+    def _futures_symbol(self, symbol: str) -> str:
+        coin, _, quote = symbol.partition("-")
+        coin = self.LEGACY_COIN_TO_KRAKEN.get(coin, coin).lstrip("X")
+        return f"pf_{coin.lower()}{quote.lower()}"
+
+    def _futures_sign(self, path, post_data, nonce):
+        import base64 as _b64
+        msg    = (post_data + nonce + path).encode()
+        sha256 = hashlib.sha256(msg).digest()
+        sig    = hmac.new(_b64.b64decode(self.credentials["futures_api_secret"]),
+                          sha256, hashlib.sha512)
+        return _b64.b64encode(sig.digest()).decode()
+
+    def _futures_request(self, method, path, data=None):
+        self._require_futures_creds()
+        data = data or {}
+        nonce = str(int(time.time() * 1000))
+        post_data = urllib.parse.urlencode(data)
+        headers = {
+            "APIKey":   self.credentials["futures_api_key"],
+            "Nonce":    nonce,
+            "Authent":  self._futures_sign(path, post_data, nonce),
+        }
+        url = f"{self.FUTURES_BASE}{path}"
+        if method == "GET":
+            resp = requests.get(url, params=data, headers=headers, timeout=10)
+        else:
+            resp = requests.post(url, data=data, headers=headers, timeout=10)
+        return resp.json()
+
+    def set_leverage(self, symbol, leverage=1):
+        fsym = self._futures_symbol(symbol)
+        self._futures_request("PUT", f"/derivatives/api/v3/leveragepreferences",
+                              {"symbol": fsym, "maxLeverage": leverage})
+
+    def get_futures_price(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        resp = requests.get(f"{self.FUTURES_BASE}/derivatives/api/v3/tickers", timeout=10)
+        for t in resp.json().get("tickers", []):
+            if t.get("symbol", "").lower() == fsym:
+                return float(t.get("markPrice", t.get("last", 0)))
+        raise ValueError(f"Kraken Futures: no ticker for {fsym}")
+
+    def _futures_market_order(self, symbol, usdt_amount, side):
+        fsym  = self._futures_symbol(symbol)
+        price = self.get_futures_price(symbol)
+        size  = round(usdt_amount / price, 6)
+        return self._futures_request("POST", "/derivatives/api/v3/sendorder", {
+            "orderType": "mkt", "symbol": fsym, "side": side, "size": size,
+        })
+
+    def open_futures_long(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "buy")
+
+    def open_futures_short(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "sell")
+
+    def close_futures_position(self, symbol):
+        pos = self.get_futures_position(symbol)
+        if pos["side"] == "none":
+            return {"msg": "no open position"}
+        fsym = self._futures_symbol(symbol)
+        side = "sell" if pos["side"] == "long" else "buy"
+        return self._futures_request("POST", "/derivatives/api/v3/sendorder", {
+            "orderType": "mkt", "symbol": fsym, "side": side,
+            "size": pos["size"], "reduceOnly": "true",
+        })
+
+    def get_futures_position(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        data = self._futures_request("GET", "/derivatives/api/v3/openpositions")
+        for p in data.get("openPositions", []):
+            if p.get("symbol", "").lower() == fsym:
+                size = float(p.get("size", 0) or 0)
+                side = p.get("side", "long")
+                return {
+                    "side": side if size != 0 else "none",
+                    "size": abs(size),
+                    "entry_price": float(p.get("price", 0) or 0),
+                    "unrealized_pnl": float(p.get("unrealizedPnl", 0) or 0),
+                }
+        return {"side": "none", "size": 0.0, "entry_price": 0.0, "unrealized_pnl": 0.0}
+
+    def get_funding_rate(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        resp = requests.get(f"{self.FUTURES_BASE}/derivatives/api/v3/tickers", timeout=10)
+        for t in resp.json().get("tickers", []):
+            if t.get("symbol", "").lower() == fsym:
+                return float(t.get("fundingRate", 0) or 0)
+        return 0.0
+
+    # ── STAKING (Kraken Earn — uses the SAME spot credentials/domain,
+    #   flexible ("opt_out"/no-bonding) strategies only) ────────────────────
+    def staking_supported(self) -> bool:
+        return True
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def _earn_strategies(self, coin):
+        path = "/0/private/Earn/Strategies"
+        sig, nonce = self._sign(path, {"asset": coin})
+        resp = requests.post(f"{self.BASE}{path}", data={"nonce": nonce, "asset": coin}, timeout=10,
+                             headers={"API-Key": self.credentials["api_key"], "API-Sign": sig})
+        data = resp.json()
+        if data.get("error"):
+            raise ValueError(f"Kraken Earn: {data['error']}")
+        return data.get("result", {}).get("items", [])
+
+    def get_staking_apr(self, coin):
+        strategies = self._earn_strategies(coin)
+        # Flexible = no lock/bonding period ("lock_type.type" == "flex")
+        flexible = [s for s in strategies if s.get("lock_type", {}).get("type") == "flex"]
+        if not flexible:
+            return 0.0
+        def _apr(s):
+            rate = s.get("apr_estimate", {}).get("high", "0")
+            return float(str(rate).rstrip("%") or 0)
+        return max(_apr(s) for s in flexible) / 100.0
+
+    def _flexible_strategy_id(self, coin):
+        strategies = self._earn_strategies(coin)
+        flexible = [s for s in strategies if s.get("lock_type", {}).get("type") == "flex"]
+        if not flexible:
+            raise ValueError(f"Kraken: no flexible earn strategy for {coin}")
+        return max(flexible, key=lambda s: float(
+            str(s.get("apr_estimate", {}).get("high", "0")).rstrip("%") or 0))["id"]
+
+    def stake_flexible(self, coin, amount):
+        strategy_id = self._flexible_strategy_id(coin)
+        path = "/0/private/Earn/Allocate"
+        data = {"strategy_id": strategy_id, "amount": str(amount)}
+        sig, nonce = self._sign(path, data)
+        resp = requests.post(f"{self.BASE}{path}", data={**data, "nonce": nonce}, timeout=10,
+                             headers={"API-Key": self.credentials["api_key"], "API-Sign": sig})
+        return resp.json()
+
+    def unstake_flexible(self, coin, amount):
+        strategy_id = self._flexible_strategy_id(coin)
+        path = "/0/private/Earn/Deallocate"
+        data = {"strategy_id": strategy_id, "amount": str(amount)}
+        sig, nonce = self._sign(path, data)
+        resp = requests.post(f"{self.BASE}{path}", data={**data, "nonce": nonce}, timeout=10,
+                             headers={"API-Key": self.credentials["api_key"], "API-Sign": sig})
+        return resp.json()
+
+    def get_staked_balance(self, coin):
+        path = "/0/private/Earn/Allocations"
+        sig, nonce = self._sign(path, {})
+        resp = requests.post(f"{self.BASE}{path}", data={"nonce": nonce}, timeout=10,
+                             headers={"API-Key": self.credentials["api_key"], "API-Sign": sig})
+        data = resp.json().get("result", {}).get("items", [])
+        total = 0.0
+        for item in data:
+            if item.get("native_asset", "").upper() == coin.upper():
+                total += float(item.get("amount_allocated", {}).get("total", {}).get("native", 0) or 0)
+        return total
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  BYBIT
@@ -595,6 +1155,141 @@ class BybitExchange(BaseExchange):
         c     = next((x for x in coins if x["coin"] == coin), None)
         return float(c["availableToWithdraw"]) if c else 0.0
 
+    # ── FUTURES (Bybit linear perpetuals — same v5 API/signing as spot,
+    #   category="linear" instead of "spot") ────────────────────────────────
+    def futures_supported(self) -> bool:
+        return True
+
+    def _v5_signed(self, method, path, params=None, body=None):
+        params = params or {}
+        ts, recv = str(int(time.time() * 1000)), "5000"
+        if method == "GET":
+            qs  = urllib.parse.urlencode(sorted(params.items()))
+            sig = hmac.new(self.credentials["api_secret"].encode(),
+                           (ts + self.credentials["api_key"] + recv + qs).encode(),
+                           hashlib.sha256).hexdigest()
+            resp = requests.get(f"{self.BASE}{path}", params=params, timeout=10,
+                                headers={"X-BAPI-API-KEY": self.credentials["api_key"],
+                                         "X-BAPI-SIGN": sig, "X-BAPI-TIMESTAMP": ts,
+                                         "X-BAPI-RECV-WINDOW": recv})
+        else:
+            import json
+            body_str = json.dumps(body or {})
+            sig = hmac.new(self.credentials["api_secret"].encode(),
+                           (ts + self.credentials["api_key"] + recv + body_str).encode(),
+                           hashlib.sha256).hexdigest()
+            resp = requests.post(f"{self.BASE}{path}", data=body_str, timeout=10,
+                                 headers={"X-BAPI-API-KEY": self.credentials["api_key"],
+                                          "X-BAPI-SIGN": sig, "X-BAPI-TIMESTAMP": ts,
+                                          "X-BAPI-RECV-WINDOW": recv,
+                                          "Content-Type": "application/json"})
+        return resp.json()
+
+    def set_leverage(self, symbol, leverage=1):
+        sym = self.normalize_symbol(symbol)
+        self._v5_signed("POST", "/v5/position/set-leverage", body={
+            "category": "linear", "symbol": sym,
+            "buyLeverage": str(leverage), "sellLeverage": str(leverage),
+        })
+
+    def get_futures_price(self, symbol):
+        sym  = self.normalize_symbol(symbol)
+        resp = requests.get(f"{self.BASE}/v5/market/tickers",
+                            params={"category": "linear", "symbol": sym}, timeout=10)
+        return float(resp.json()["result"]["list"][0]["lastPrice"])
+
+    def _futures_market_order(self, symbol, usdt_amount, side, reduce_only=False):
+        sym   = self.normalize_symbol(symbol)
+        price = self.get_futures_price(symbol)
+        qty   = round(usdt_amount / price, 3)
+        body  = {"category": "linear", "symbol": sym, "side": side,
+                "orderType": "Market", "qty": str(qty)}
+        if reduce_only:
+            body["reduceOnly"] = True
+        return self._v5_signed("POST", "/v5/order/create", body=body)
+
+    def open_futures_long(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "Buy")
+
+    def open_futures_short(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "Sell")
+
+    def close_futures_position(self, symbol):
+        pos = self.get_futures_position(symbol)
+        if pos["side"] == "none":
+            return {"msg": "no open position"}
+        sym  = self.normalize_symbol(symbol)
+        side = "Sell" if pos["side"] == "long" else "Buy"
+        return self._v5_signed("POST", "/v5/order/create", body={
+            "category": "linear", "symbol": sym, "side": side,
+            "orderType": "Market", "qty": str(pos["size"]), "reduceOnly": True,
+        })
+
+    def get_futures_position(self, symbol):
+        sym  = self.normalize_symbol(symbol)
+        data = self._v5_signed("GET", "/v5/position/list", params={"category": "linear", "symbol": sym})
+        rows = data.get("result", {}).get("list", [])
+        row  = rows[0] if rows else {}
+        size = float(row.get("size", 0) or 0)
+        if size == 0:
+            return {"side": "none", "size": 0.0, "entry_price": 0.0, "unrealized_pnl": 0.0}
+        return {
+            "side": row.get("side", "Buy").lower() == "buy" and "long" or "short",
+            "size": size,
+            "entry_price": float(row.get("avgPrice", 0) or 0),
+            "unrealized_pnl": float(row.get("unrealisedPnl", 0) or 0),
+        }
+
+    def get_funding_rate(self, symbol):
+        sym  = self.normalize_symbol(symbol)
+        resp = requests.get(f"{self.BASE}/v5/market/funding/history",
+                            params={"category": "linear", "symbol": sym, "limit": 1}, timeout=10)
+        rows = resp.json().get("result", {}).get("list", [])
+        return float(rows[0]["fundingRate"]) if rows else 0.0
+
+    # ── STAKING (Bybit Earn — flexible savings only) ────────────────────────
+    def staking_supported(self) -> bool:
+        return True
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_staking_apr(self, coin):
+        data = self._v5_signed("GET", "/v5/earn/product",
+                               params={"category": "FlexibleSaving", "coin": coin})
+        rows = data.get("result", {}).get("list", [])
+        if not rows:
+            return 0.0
+        return max(float(r.get("estimateApr", "0").rstrip("%") or 0) for r in rows) / 100.0
+
+    def _flexible_product_id(self, coin):
+        data = self._v5_signed("GET", "/v5/earn/product",
+                               params={"category": "FlexibleSaving", "coin": coin})
+        rows = data.get("result", {}).get("list", [])
+        if not rows:
+            raise ValueError(f"Bybit: no flexible earn product for {coin}")
+        return max(rows, key=lambda r: float(r.get("estimateApr", "0").rstrip("%") or 0))["productId"]
+
+    def stake_flexible(self, coin, amount):
+        product_id = self._flexible_product_id(coin)
+        return self._v5_signed("POST", "/v5/earn/place-order", body={
+            "category": "FlexibleSaving", "productId": product_id,
+            "orderType": "Subscribe", "amount": str(amount), "accountType": "UNIFIED",
+        })
+
+    def unstake_flexible(self, coin, amount):
+        product_id = self._flexible_product_id(coin)
+        return self._v5_signed("POST", "/v5/earn/place-order", body={
+            "category": "FlexibleSaving", "productId": product_id,
+            "orderType": "Redeem", "amount": str(amount), "accountType": "UNIFIED",
+        })
+
+    def get_staked_balance(self, coin):
+        data = self._v5_signed("GET", "/v5/earn/position",
+                               params={"category": "FlexibleSaving", "coin": coin})
+        rows = data.get("result", {}).get("list", [])
+        return sum(float(r.get("amount", 0) or 0) for r in rows)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  OKX
@@ -677,6 +1372,117 @@ class OKXExchange(BaseExchange):
         c = next((d for d in details if d["ccy"] == coin), None)
         return float(c["availEq"]) if c else 0.0
 
+    # ── FUTURES (OKX SWAP instruments — same JWT-less HMAC signing as spot,
+    #   net position mode assumed — i.e. account NOT in hedge/long-short
+    #   mode. If your OKX account has hedge mode enabled, orders here will
+    #   be rejected for missing "posSide" — switch the account to net mode
+    #   at OKX: Trade Settings, or add posSide handling before enabling.) ──
+    def futures_supported(self) -> bool:
+        return True
+
+    def _futures_inst(self, symbol: str) -> str:
+        return f"{symbol}-SWAP"   # BTC-USDT -> BTC-USDT-SWAP
+
+    def set_leverage(self, symbol, leverage=1):
+        import json
+        inst = self._futures_inst(symbol)
+        path = "/api/v5/account/set-leverage"
+        body = json.dumps({"instId": inst, "lever": str(leverage), "mgnMode": "isolated"})
+        requests.post(f"{self.BASE}{path}", data=body, timeout=10,
+                      headers=self._headers("POST", path, body))
+
+    def get_futures_price(self, symbol):
+        inst = self._futures_inst(symbol)
+        resp = requests.get(f"{self.BASE}/api/v5/market/ticker", params={"instId": inst}, timeout=10)
+        return float(resp.json()["data"][0]["last"])
+
+    def _futures_market_order(self, symbol, usdt_amount, side, reduce_only=False):
+        import json
+        inst  = self._futures_inst(symbol)
+        price = self.get_futures_price(symbol)
+        sz    = str(round(usdt_amount / price, 6))
+        path  = "/api/v5/trade/order"
+        body  = json.dumps({
+            "instId": inst, "tdMode": "isolated", "side": side,
+            "ordType": "market", "sz": sz, "reduceOnly": reduce_only,
+        })
+        resp = requests.post(f"{self.BASE}{path}", data=body, timeout=10,
+                             headers=self._headers("POST", path, body))
+        return resp.json()
+
+    def open_futures_long(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "buy")
+
+    def open_futures_short(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "sell")
+
+    def close_futures_position(self, symbol):
+        import json
+        inst = self._futures_inst(symbol)
+        path = "/api/v5/trade/close-position"
+        body = json.dumps({"instId": inst, "mgnMode": "isolated"})
+        resp = requests.post(f"{self.BASE}{path}", data=body, timeout=10,
+                             headers=self._headers("POST", path, body))
+        return resp.json()
+
+    def get_futures_position(self, symbol):
+        inst = self._futures_inst(symbol)
+        path = f"/api/v5/account/positions?instId={inst}"
+        resp = requests.get(f"{self.BASE}{path}", timeout=10, headers=self._headers("GET", path))
+        rows = resp.json().get("data", [])
+        row  = rows[0] if rows else {}
+        pos  = float(row.get("pos", 0) or 0)
+        if pos == 0:
+            return {"side": "none", "size": 0.0, "entry_price": 0.0, "unrealized_pnl": 0.0}
+        return {
+            "side": "long" if pos > 0 else "short",
+            "size": abs(pos),
+            "entry_price": float(row.get("avgPx", 0) or 0),
+            "unrealized_pnl": float(row.get("upl", 0) or 0),
+        }
+
+    def get_funding_rate(self, symbol):
+        inst = self._futures_inst(symbol)
+        resp = requests.get(f"{self.BASE}/api/v5/public/funding-rate", params={"instId": inst}, timeout=10)
+        data = resp.json().get("data", [])
+        return float(data[0].get("fundingRate", 0) or 0) if data else 0.0
+
+    # ── STAKING (OKX Savings — flexible/"demand" products only) ─────────────
+    def staking_supported(self) -> bool:
+        return True
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_staking_apr(self, coin):
+        resp = requests.get(f"{self.BASE}/api/v5/finance/savings/lending-rate-summary",
+                            params={"ccy": coin}, timeout=10)
+        data = resp.json().get("data", [])
+        return float(data[0].get("avgRate", 0) or 0) if data else 0.0
+
+    def stake_flexible(self, coin, amount):
+        import json
+        path = "/api/v5/finance/savings/purchase-redempt"
+        body = json.dumps({"ccy": coin, "amt": str(amount), "side": "purchase", "rate": "0.01"})
+        resp = requests.post(f"{self.BASE}{path}", data=body, timeout=10,
+                             headers=self._headers("POST", path, body))
+        return resp.json()
+
+    def unstake_flexible(self, coin, amount):
+        import json
+        path = "/api/v5/finance/savings/purchase-redempt"
+        body = json.dumps({"ccy": coin, "amt": str(amount), "side": "redempt"})
+        resp = requests.post(f"{self.BASE}{path}", data=body, timeout=10,
+                             headers=self._headers("POST", path, body))
+        return resp.json()
+
+    def get_staked_balance(self, coin):
+        path = "/api/v5/finance/savings/balance"
+        resp = requests.get(f"{self.BASE}{path}?ccy={coin}", timeout=10,
+                            headers=self._headers("GET", f"{path}?ccy={coin}"))
+        data = resp.json().get("data", [])
+        return sum(float(d.get("amt", 0) or 0) for d in data)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  GATE.IO
@@ -750,6 +1556,132 @@ class GateIOExchange(BaseExchange):
         c    = next((a for a in accs if a["currency"] == coin), None)
         return float(c["available"]) if c else 0.0
 
+    # ── FUTURES (Gate.io USDT-margined perpetuals — same HMAC-SHA512
+    #   signing as spot, /futures/usdt base path) ────────────────────────────
+    FUTURES_PATH_BASE = "/api/v4/futures/usdt"
+
+    def futures_supported(self) -> bool:
+        return True
+
+    def _futures_contract(self, symbol: str) -> str:
+        return symbol.replace("-", "_")   # BTC-USDT -> BTC_USDT
+
+    def _futures_signed(self, method, path, query="", body=""):
+        headers = self._sign(method, path, query, body)
+        headers["Content-Type"] = "application/json"
+        return headers
+
+    def set_leverage(self, symbol, leverage=1):
+        contract = self._futures_contract(symbol)
+        path = f"{self.FUTURES_PATH_BASE}/positions/{contract}/leverage"
+        query = f"leverage={leverage}"
+        resp = requests.post(f"https://api.gateio.ws{path}?{query}", timeout=10,
+                             headers=self._futures_signed("POST", path, query))
+        return resp.json()
+
+    def _contract_multiplier(self, contract: str) -> float:
+        resp = requests.get(f"https://api.gateio.ws{self.FUTURES_PATH_BASE}/contracts/{contract}", timeout=10)
+        return float(resp.json().get("quanto_multiplier", 1))
+
+    def get_futures_price(self, symbol):
+        contract = self._futures_contract(symbol)
+        resp = requests.get(f"https://api.gateio.ws{self.FUTURES_PATH_BASE}/tickers",
+                            params={"contract": contract}, timeout=10)
+        rows = resp.json()
+        return float(rows[0]["last"]) if rows else 0.0
+
+    def _futures_market_order(self, symbol, usdt_amount, direction, reduce_only=False):
+        import json
+        contract   = self._futures_contract(symbol)
+        multiplier = self._contract_multiplier(contract)
+        price      = self.get_futures_price(symbol)
+        contracts  = max(1, round(usdt_amount / (price * multiplier)))
+        size       = contracts if direction == "buy" else -contracts
+        path = f"{self.FUTURES_PATH_BASE}/orders"
+        body = json.dumps({"contract": contract, "size": size, "price": "0",
+                           "tif": "ioc", "reduce_only": reduce_only})
+        resp = requests.post(f"https://api.gateio.ws{path}", data=body, timeout=10,
+                             headers=self._futures_signed("POST", path, body=body))
+        return resp.json()
+
+    def open_futures_long(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "buy")
+
+    def open_futures_short(self, symbol, usdt_amount):
+        self.set_leverage(symbol, 1)
+        return self._futures_market_order(symbol, usdt_amount, "sell")
+
+    def close_futures_position(self, symbol):
+        import json
+        pos = self.get_futures_position(symbol)
+        if pos["side"] == "none":
+            return {"msg": "no open position"}
+        contract = self._futures_contract(symbol)
+        size = -int(pos["size"]) if pos["side"] == "long" else int(pos["size"])
+        path = f"{self.FUTURES_PATH_BASE}/orders"
+        body = json.dumps({"contract": contract, "size": size, "price": "0",
+                           "tif": "ioc", "reduce_only": True})
+        resp = requests.post(f"https://api.gateio.ws{path}", data=body, timeout=10,
+                             headers=self._futures_signed("POST", path, body=body))
+        return resp.json()
+
+    def get_futures_position(self, symbol):
+        contract = self._futures_contract(symbol)
+        path = f"{self.FUTURES_PATH_BASE}/positions/{contract}"
+        resp = requests.get(f"https://api.gateio.ws{path}", timeout=10,
+                            headers=self._futures_signed("GET", path))
+        data = resp.json()
+        size = float(data.get("size", 0) or 0) if isinstance(data, dict) else 0
+        if size == 0:
+            return {"side": "none", "size": 0.0, "entry_price": 0.0, "unrealized_pnl": 0.0}
+        return {
+            "side": "long" if size > 0 else "short",
+            "size": abs(size),
+            "entry_price": float(data.get("entry_price", 0) or 0),
+            "unrealized_pnl": float(data.get("unrealised_pnl", 0) or 0),
+        }
+
+    def get_funding_rate(self, symbol):
+        contract = self._futures_contract(symbol)
+        resp = requests.get(f"https://api.gateio.ws{self.FUTURES_PATH_BASE}/funding_rate",
+                            params={"contract": contract, "limit": 1}, timeout=10)
+        rows = resp.json()
+        return float(rows[0]["r"]) if rows else 0.0
+
+    # ── STAKING (Gate.io Earn Uni-Lend — flexible only) ─────────────────────
+    def staking_supported(self) -> bool:
+        return True
+
+    @retry(max_attempts=3, base_delay=2.0, max_delay=20.0)
+    def get_staking_apr(self, coin):
+        resp = requests.get("https://api.gateio.ws/api/v4/earn/uni/currencies/" + coin, timeout=10)
+        data = resp.json()
+        return float(data.get("current_rate", 0) or 0) if isinstance(data, dict) else 0.0
+
+    def stake_flexible(self, coin, amount):
+        import json
+        path = "/api/v4/earn/uni/lends"
+        body = json.dumps({"currency": coin, "amount": str(amount)})
+        resp = requests.post(f"https://api.gateio.ws{path}", data=body, timeout=10,
+                             headers=self._futures_signed("POST", path, body=body))
+        return resp.json()
+
+    def unstake_flexible(self, coin, amount):
+        import json
+        path = "/api/v4/earn/uni/lends"
+        body = json.dumps({"currency": coin, "amount": str(amount)})
+        resp = requests.patch(f"https://api.gateio.ws{path}", data=body, timeout=10,
+                              headers=self._futures_signed("PATCH", path, body=body))
+        return resp.json()
+
+    def get_staked_balance(self, coin):
+        path = "/api/v4/earn/uni/lends"
+        resp = requests.get(f"https://api.gateio.ws{path}", params={"currency": coin}, timeout=10,
+                            headers=self._futures_signed("GET", path, f"currency={coin}"))
+        rows = resp.json()
+        return sum(float(r.get("amount", 0) or 0) for r in rows) if isinstance(rows, list) else 0.0
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MEXC
@@ -818,10 +1750,120 @@ class MEXCExchange(BaseExchange):
         c      = next((b for b in bals if b["asset"] == coin), None)
         return float(c["free"]) if c else 0.0
 
+    # ── FUTURES (MEXC Contract API — contract.mexc.com) ─────────────────────
+    #
+    # CAUTION: MEXC's contract (futures) API lives on a separate domain
+    # from spot with a different, less consistently documented signing
+    # scheme than MEXC's spot API (which itself mirrors Binance's). This
+    # is implemented from MEXC's published contract API reference but,
+    # unlike the Binance/Bybit/OKX/KuCoin/Gate.io adapters above, was NOT
+    # cross-checked against multiple independent working examples — MEXC's
+    # contract docs have historically had more inconsistencies than the
+    # majors. Test with a $1-2 order on a low-value pair before trusting
+    # this with real size, exactly as you would test any new integration
+    # against a live account for the first time.
+    CONTRACT_BASE = "https://contract.mexc.com"
+
+    def futures_supported(self) -> bool:
+        return True
+
+    def _contract_symbol(self, symbol: str) -> str:
+        return symbol   # MEXC contract API already uses "BTC_USDT"-style... see below
+
+    def _contract_sign(self, params_str: str):
+        ts  = str(int(time.time() * 1000))
+        sig = hmac.new(self.credentials["api_secret"].encode(),
+                       (self.credentials["api_key"] + ts + params_str).encode(),
+                       hashlib.sha256).hexdigest()
+        return {"ApiKey": self.credentials["api_key"], "Request-Time": ts,
+                "Signature": sig, "Content-Type": "application/json"}
+
+    def _futures_symbol(self, symbol: str) -> str:
+        return symbol.replace("-", "_")   # BTC-USDT -> BTC_USDT
+
+    def set_leverage(self, symbol, leverage=1):
+        # MEXC contract leverage is set per-order via the "leverage" field
+        # on order submission (see _futures_market_order) — no standalone
+        # endpoint call needed.
+        pass
+
+    def get_futures_price(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        resp = requests.get(f"{self.CONTRACT_BASE}/api/v1/contract/ticker",
+                            params={"symbol": fsym}, timeout=10)
+        return float(resp.json()["data"]["lastPrice"])
+
+    def _futures_market_order(self, symbol, usdt_amount, side, reduce_only=False):
+        import json
+        fsym  = self._futures_symbol(symbol)
+        price = self.get_futures_price(symbol)
+        vol   = max(1, round(usdt_amount / price))
+        # side: 1=open long, 2=close short, 3=open short, 4=close long
+        body  = json.dumps({
+            "symbol": fsym, "price": price, "vol": vol, "leverage": 1,
+            "side": side, "type": "5",  # type 5 = market order
+            "openType": 2,               # 2 = isolated margin
+        })
+        headers = self._contract_sign(body)
+        resp = requests.post(f"{self.CONTRACT_BASE}/api/v1/private/order/submit",
+                             data=body, headers=headers, timeout=10)
+        return resp.json()
+
+    def open_futures_long(self, symbol, usdt_amount):
+        return self._futures_market_order(symbol, usdt_amount, side=1)
+
+    def open_futures_short(self, symbol, usdt_amount):
+        return self._futures_market_order(symbol, usdt_amount, side=3)
+
+    def close_futures_position(self, symbol):
+        pos = self.get_futures_position(symbol)
+        if pos["side"] == "none":
+            return {"msg": "no open position"}
+        side = 4 if pos["side"] == "long" else 2
+        return self._futures_market_order(symbol, pos["size"] * pos["entry_price"], side=side, reduce_only=True)
+
+    def get_futures_position(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        headers = self._contract_sign(f"symbol={fsym}")
+        resp = requests.get(f"{self.CONTRACT_BASE}/api/v1/private/position/open_positions",
+                            params={"symbol": fsym}, headers=headers, timeout=10)
+        rows = resp.json().get("data", [])
+        if not rows:
+            return {"side": "none", "size": 0.0, "entry_price": 0.0, "unrealized_pnl": 0.0}
+        row = rows[0]
+        # positionType: 1 = long, 2 = short
+        return {
+            "side": "long" if row.get("positionType") == 1 else "short",
+            "size": float(row.get("holdVol", 0) or 0),
+            "entry_price": float(row.get("holdAvgPrice", 0) or 0),
+            "unrealized_pnl": float(row.get("unrealized", row.get("realized", 0)) or 0),
+        }
+
+    def get_funding_rate(self, symbol):
+        fsym = self._futures_symbol(symbol)
+        resp = requests.get(f"{self.CONTRACT_BASE}/api/v1/contract/funding_rate/{fsym}", timeout=10)
+        return float(resp.json().get("data", {}).get("fundingRate", 0) or 0)
+
+    # ── STAKING ───────────────────────────────────────────────────────────
+    #
+    # MEXC does not expose a documented, stable public REST API for its
+    # flexible Earn/staking product the way Binance/Bybit/OKX/KuCoin/
+    # Gate.io/Kraken do — MEXC's own API reference does not list Earn
+    # endpoints as of this writing. Rather than guess at undocumented
+    # endpoints for a feature that moves real funds, staking is left
+    # unimplemented here; staking_manager.py skips this exchange.
+    # (staking_supported() defaults to False via BaseExchange.)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  WEBULL (crypto only — wraps the official webull-openapi-python-sdk)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+#  NO FUTURES / NO STAKING: Webull's crypto OpenAPI is spot-only — it has
+#  no perpetuals/futures product and no flexible-earn/staking product for
+#  crypto. futures_supported()/staking_supported() are left at the
+#  BaseExchange default (False) rather than faked. If Webull adds either
+#  product to its public API in the future, implement here then.
 #
 #  IMPORTANT — read before enabling:
 #
@@ -981,6 +2023,10 @@ class WebullExchange(BaseExchange):
 #  VIRGOCX (Canadian exchange, CAD-quoted pairs — wraps the vcx-py client)
 # ══════════════════════════════════════════════════════════════════════════════
 #
+#  NO FUTURES / NO STAKING: VirgoCX is a small CAD spot-only exchange with
+#  no derivatives or earn/staking product at all. futures_supported()/
+#  staking_supported() are left at the BaseExchange default (False).
+#
 #  IMPORTANT — read before enabling:
 #
 #  1. Requires a VirgoCX account with API access enabled. Generate your
@@ -1097,6 +2143,23 @@ class VirgoCXExchange(BaseExchange):
 # ══════════════════════════════════════════════════════════════════════════════
 #  COINBASE (Advanced Trade API v3 — JWT / EC-key auth)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+#  NO FUTURES / NO STAKING (via this API): Coinbase does offer perpetual
+#  futures (via "INTX"/Coinbase Financial Markets), but it requires a
+#  separate, eligibility-gated account type most retail Coinbase users
+#  don't have enabled, on top of different order/margin parameters than
+#  the spot orders this adapter places — confirmed with the account owner
+#  that INTX isn't enabled here, so it's intentionally not implemented
+#  rather than shipped unverified. If you DO have INTX access, this is
+#  the place to add it (same pattern as Kraken Futures above — separate
+#  credentials/endpoint, gated behind its own capability check).
+#  Coinbase also does not offer flexible crypto staking through this API
+#  (Coinbase's on-chain staking is a different product with lockup and
+#  validator-exit mechanics unlike the other exchanges' flexible-earn
+#  products, and isn't a fit for the "unstake on short notice" model
+#  staking_manager.py relies on) — this one is a hard no regardless of
+#  account type. futures_supported()/staking_supported() are left at the
+#  BaseExchange default (False) rather than guessed at.
 #
 #  Credentials needed (generate at https://www.coinbase.com/settings/api):
 #    api_key    — API key name, format: organizations/{org_id}/apiKeys/{key_id}

@@ -35,6 +35,13 @@ BINANCE_API_SECRET  = ""
 KRAKEN_API_KEY      = ""
 KRAKEN_API_SECRET   = ""
 
+# Kraken FUTURES is a separate product from Kraken spot, with its own API
+# key system — generate these at https://futures.kraken.com/settings/api
+# (your regular Kraken spot keys above will NOT work for futures calls).
+# Only needed if you enable "futures_enabled" for kraken in config.py.
+KRAKEN_FUTURES_API_KEY    = ""
+KRAKEN_FUTURES_API_SECRET = ""
+
 BYBIT_API_KEY       = ""
 BYBIT_API_SECRET    = ""
 

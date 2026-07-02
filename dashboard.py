@@ -23,9 +23,14 @@ Install Streamlit:
 import sys
 import json
 import glob
-import pandas as pd
 from pathlib import Path
 from datetime import datetime, date
+
+import bootstrap
+bootstrap.ensure_installed(optional=True)  # pandas, plotly (streamlit itself must
+                                            # already be present — it's what launched this file)
+
+import pandas as pd
 
 # ── Check Streamlit is installed ──────────────────────────────────────────
 try:

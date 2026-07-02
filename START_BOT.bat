@@ -38,12 +38,12 @@ if "%PYTHON_CMD%"=="" (
 )
 
 :: ── Check dependencies ─────────────────────────────────────────────────────────
-"%PYTHON_CMD%" -c "import kucoin" >nul 2>&1
+"%PYTHON_CMD%" -c "import kucoin, pandas, numpy, requests, bs4" >nul 2>&1
 if errorlevel 1 (
     color 0E
-    echo  Dependencies not found. Installing now...
+    echo  Dependencies not found. Installing now from requirements.txt...
     echo.
-    "%PYTHON_CMD%" -m pip install "python-kucoin==2.1.3" pandas requests --quiet --no-warn-script-location
+    "%PYTHON_CMD%" -m pip install -r requirements.txt --quiet --no-warn-script-location
     echo.
 )
 

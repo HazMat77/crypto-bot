@@ -116,15 +116,14 @@ echo.
 set "PATH=%SCRIPTS_DIR%;%PATH%"
 
 :: ── Install dependencies using python -m pip (bypasses PATH issues entirely) ──
-echo  Step: Installing bot dependencies...
-echo  (pip, python-kucoin, pandas, requests)
+:: Installed straight from requirements.txt (core + optional) so any package
+:: this project adds in the future is picked up automatically — no need to
+:: keep this script's package list in sync by hand.
+echo  Step: Installing bot dependencies from requirements.txt...
 echo.
 
 %PYTHON_CMD% -m pip install --upgrade pip --quiet --no-warn-script-location
-%PYTHON_CMD% -m pip install "python-kucoin==2.1.3" pandas requests beautifulsoup4 --upgrade --quiet --no-warn-script-location
-
-echo  Installing optional packages (backtesting, charts, dashboard)...
-%PYTHON_CMD% -m pip install ccxt matplotlib streamlit plotly --quiet --no-warn-script-location 2>nul
+%PYTHON_CMD% -m pip install -r requirements.txt --upgrade --quiet --no-warn-script-location
 echo  (optional packages installed where available)
 
 :: Verify packages installed correctly

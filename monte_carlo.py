@@ -27,6 +27,24 @@ from collections import defaultdict
 
 log = logging.getLogger(__name__)
 
+# Rough relative win-rate/volatility multipliers per regime, used only to
+# bias which historical trades get sampled during a regime-aware run (see
+# MonteCarlo.run(regime_aware=True) below) — NOT a from-scratch synthetic
+# return model. Mirrors adaptive_intelligence.REGIME_STRATEGIES' own
+# relative sizing (position_size_mult) without importing that module
+# directly, so monte_carlo.py has no hard dependency on the live bot's
+# regime engine and can still run standalone from the CLI against a plain
+# backtest CSV.
+REGIME_BIAS = {
+    "BULL_STRONG": 1.3,
+    "BULL_WEAK":   1.0,
+    "SIDEWAYS":    0.7,
+    "BEAR_WEAK":   0.6,
+    "BEAR_STRONG": 0.4,
+    "VOLATILE":    0.5,
+}
+REGIME_NAMES = list(REGIME_BIAS.keys())
+
 
 class MonteCarlo:
 
@@ -89,22 +107,103 @@ class MonteCarlo:
             "equity":     equity,
         }
 
+    def _regime_transition(self, current: str, persistence: float) -> str:
+        if random.random() < persistence:
+            return current
+        return random.choice([r for r in REGIME_NAMES if r != current])
+
+    def _run_single_regime_aware(self, trades_per_run: int,
+                                  regime_persistence: float = 0.90) -> dict:
+        """
+        Same random-walk simulation as _run_single, but each simulated
+        trade happens "inside" a regime that can shift over the course of
+        the run (Markov chain with `regime_persistence` chance of staying
+        in the current regime each step — answers "what if the market
+        transitions from bull to bear partway through" rather than
+        assuming today's conditions hold for the entire simulated path).
+
+        The regime affects two things, both grounded in how the real bot
+        already behaves (adaptive_intelligence.REGIME_STRATEGIES):
+          - Effective win probability is nudged by REGIME_BIAS around the
+            historical base rate (bull regimes nudge it up, bear/volatile
+            nudge it down) — the WIN/LOSS MAGNITUDE for whichever outcome
+            is drawn still comes from real historical trades, never a
+            fabricated number.
+          - Position size scales by the same REGIME_BIAS, mirroring the
+            real bot's position_size_mult per regime.
+        """
+        pool   = self.starting_pool
+        equity = [pool]
+        peak   = pool
+        max_dd = 0.0
+
+        wins   = [r for r in self.trade_returns if r >= 0] or [0.0]
+        losses = [r for r in self.trade_returns if r < 0]  or [-0.001]
+
+        regime = random.choice(REGIME_NAMES)
+        regime_counts = defaultdict(int)
+
+        for _ in range(trades_per_run):
+            if pool < self.ruin_level:
+                break
+
+            regime = self._regime_transition(regime, regime_persistence)
+            regime_counts[regime] += 1
+            bias = REGIME_BIAS.get(regime, 1.0)
+
+            effective_wr = min(0.95, max(0.05, self.win_rate * bias))
+            ret  = random.choice(wins) if random.random() < effective_wr else random.choice(losses)
+
+            size  = min(self.trade_size * bias, pool * 0.10)
+            fees  = size * self.fee_rate * 2
+            pnl   = size * ret - fees
+            pool += pnl
+            pool  = max(pool, 0.0)
+
+            equity.append(pool)
+            peak   = max(peak, pool)
+            dd     = (peak - pool) / peak if peak > 0 else 0
+            max_dd = max(max_dd, dd)
+
+        return {
+            "final_pool":    pool,
+            "roi_pct":       (pool - self.starting_pool) / self.starting_pool * 100,
+            "max_dd":        max_dd * 100,
+            "ruined":        pool < self.ruin_level,
+            "equity":        equity,
+            "regime_counts": dict(regime_counts),
+        }
+
     def run(self, simulations: int = 1000,
-            trades_per_sim: int = None) -> list:
+            trades_per_sim: int = None,
+            regime_aware: bool = False,
+            regime_persistence: float = 0.90) -> list:
         """
         Run N Monte Carlo simulations.
 
         Args:
-            simulations:    Number of random paths to simulate
-            trades_per_sim: Trades per simulation (default: same as backtest)
+            simulations:        Number of random paths to simulate
+            trades_per_sim:      Trades per simulation (default: same as backtest)
+            regime_aware:        If True, each simulated path drifts through
+                                  shifting market regimes instead of assuming
+                                  one fixed win-rate distribution throughout
+                                  — see _run_single_regime_aware above.
+            regime_persistence:  Only used when regime_aware=True. Chance
+                                  the regime stays the same from one
+                                  simulated trade to the next (0.90 = a
+                                  regime typically lasts ~10 trades before
+                                  shifting — lower this to simulate more
+                                  volatile regime-switching conditions).
         """
         n_trades = trades_per_sim or len(self.trades)
         log.info(f"[MC] Running {simulations:,} simulations "
-                 f"({n_trades} trades each)...")
+                 f"({n_trades} trades each"
+                 f"{', regime-aware' if regime_aware else ''})...")
 
         self.results = []
         for i in range(simulations):
-            r = self._run_single(n_trades)
+            r = (self._run_single_regime_aware(n_trades, regime_persistence)
+                 if regime_aware else self._run_single(n_trades))
             self.results.append(r)
 
         log.info(f"[MC] Complete. Median final pool: "
@@ -130,7 +229,7 @@ class MonteCarlo:
         p75 = final_pools[int(n * 0.75)]
         p95 = final_pools[int(n * 0.95)]
 
-        return {
+        result = {
             "simulations":       n,
             "starting_pool":     self.starting_pool,
             "win_rate_pct":      round(self.win_rate * 100, 1),
@@ -146,6 +245,25 @@ class MonteCarlo:
             "avg_max_drawdown":  round(statistics.mean(drawdowns), 2),
             "worst_drawdown":    round(max(drawdowns), 2),
         }
+
+        # If run(regime_aware=True) was used, aggregate how much simulated
+        # time was spent in each regime across all paths — mostly a sanity
+        # check that the Markov persistence setting produced a believable
+        # mix, not dominated by one regime through bad luck in the RNG.
+        if self.results and "regime_counts" in self.results[0]:
+            total_regime_steps = defaultdict(int)
+            grand_total = 0
+            for r in self.results:
+                for regime, count in r["regime_counts"].items():
+                    total_regime_steps[regime] += count
+                    grand_total += count
+            result["regime_exposure_pct"] = {
+                regime: round(count / grand_total * 100, 1)
+                for regime, count in sorted(total_regime_steps.items(),
+                                            key=lambda kv: -kv[1])
+            } if grand_total else {}
+
+        return result
 
     def print_summary(self):
         s = self.summary()
@@ -169,6 +287,12 @@ class MonteCarlo:
         print(f"  Avg ROI:                  {s['avg_roi_pct']:+.2f}%")
         print(f"  Avg max drawdown:         {s['avg_max_drawdown']:.1f}%")
         print(f"  Worst drawdown seen:      {s['worst_drawdown']:.1f}%")
+
+        if "regime_exposure_pct" in s:
+            print(f"  {'─'*56}")
+            print(f"  Regime exposure across all simulated paths:")
+            for regime, pct in s["regime_exposure_pct"].items():
+                print(f"    {regime:<14} {pct:>5.1f}%")
 
         verdict = ("✅ Strategy shows positive edge" if s["prob_profit_pct"] >= 60
                    else "⚠️  Marginal — monitor closely" if s["prob_profit_pct"] >= 50

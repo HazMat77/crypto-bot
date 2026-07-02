@@ -14,6 +14,9 @@ from tkinter import ttk, scrolledtext, messagebox
 from datetime import datetime, date
 from pathlib import Path
 
+import bootstrap
+bootstrap.ensure_installed()
+
 # ── Palette ────────────────────────────────────────────────────────────────
 C = {
     "bg":       "#0d1117",
@@ -182,6 +185,7 @@ class Dashboard:
             ("📊", "Overview"),
             ("💰", "Pools"),
             ("📋", "Trades"),
+            ("🧾", "Reports"),
             ("📰", "News"),
             ("⚙️", "Config"),
             ("📁", "Logs"),
@@ -220,7 +224,7 @@ class Dashboard:
         self._current_page = "Overview"
         self._page_frames  = {}
 
-        for name in ("Overview","Pools","Trades","News","Config","Logs"):
+        for name in ("Overview","Pools","Trades","Reports","News","Config","Logs"):
             f = tk.Frame(self.main, bg=C["bg"])
             self._page_frames[name] = f
             getattr(self, f"_build_{name.lower()}")()
@@ -346,6 +350,111 @@ class Dashboard:
         self.trade_tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         self.trade_tree.pack(fill="both", expand=True, padx=12, pady=8)
+
+    def _build_reports(self):
+        p = self._page_frames["Reports"]
+        self._report_period = "daily"
+
+        hdr = tk.Frame(p, bg=C["bg"])
+        hdr.pack(fill="x", padx=16, pady=(16,8))
+        tk.Label(hdr, text="Trading Reports", bg=C["bg"], fg=C["text"],
+                font=FONT_TITLE).pack(side="left")
+
+        self._report_btns = {}
+        btn_row = tk.Frame(hdr, bg=C["bg"])
+        btn_row.pack(side="right")
+        for period, label in (("daily","Daily"),("monthly","Monthly"),("yearly","Yearly")):
+            b = PillButton(btn_row, label, lambda pr=period: self._select_report_period(pr),
+                          C["blue"] if period == "daily" else C["border"])
+            b.pack(side="left", padx=3)
+            self._report_btns[period] = b
+
+        self.report_label = tk.Label(p, text="", bg=C["bg"], fg=C["muted"],
+                                     font=("Segoe UI",9) if sys.platform=="win32" else ("SF Pro",9))
+        self.report_label.pack(anchor="w", padx=16)
+
+        metrics = tk.Frame(p, bg=C["bg"])
+        metrics.pack(fill="x", padx=16, pady=8)
+        self.r_trades = MetricTile(metrics, "TRADES")
+        self.r_wr     = MetricTile(metrics, "WIN RATE")
+        self.r_gross  = MetricTile(metrics, "GROSS P&L")
+        self.r_fees   = MetricTile(metrics, "FEES")
+        self.r_net    = MetricTile(metrics, "NET P&L")
+        self.r_roi    = MetricTile(metrics, "ROI")
+        for t in (self.r_trades, self.r_wr, self.r_gross, self.r_fees, self.r_net, self.r_roi):
+            t.pack(side="left", fill="both", expand=True, padx=4)
+
+        lower = tk.Frame(p, bg=C["bg"])
+        lower.pack(fill="both", expand=True, padx=16, pady=8)
+
+        coin_card = Card(lower, title="BY COIN")
+        coin_card.pack(side="left", fill="both", expand=True, padx=(0,4))
+        cols = ("Coin","Trades","Gross","Fees","Net")
+        self.report_tree = ttk.Treeview(coin_card, columns=cols,
+                                        show="headings", style="Pos.Treeview")
+        for c, w in zip(cols, [90,70,90,90,90]):
+            self.report_tree.heading(c, text=c); self.report_tree.column(c, width=w, anchor="center")
+        self.report_tree.tag_configure("win",  foreground=C["green"])
+        self.report_tree.tag_configure("loss", foreground=C["red"])
+        self.report_tree.pack(fill="both", expand=True, padx=12, pady=8)
+
+        best_card = Card(lower, title="BEST / WORST TRADE")
+        best_card.pack(side="left", fill="both", expand=True, padx=(4,0))
+        self.report_best_table = self._make_kv_table(best_card)
+
+    def _select_report_period(self, period):
+        self._report_period = period
+        for pr, b in self._report_btns.items():
+            b.configure(bg=C["blue"] if pr == period else C["border"])
+            b._base_color = C["blue"] if pr == period else C["border"]
+        self._load_report()
+
+    def _load_report(self):
+        def _fetch():
+            try:
+                from reports import build_report
+                import config as cfg
+                importlib.reload(cfg)
+                starting = getattr(cfg, "PAPER_STARTING_USDT", 100.0)
+                report = build_report(self._report_period, starting_pool=starting)
+                self.root.after(0, lambda: self._render_report(report))
+            except Exception as e:
+                self.root.after(0, lambda: self.report_label.configure(
+                    text=f"Could not load report: {e}", fg=C["red"]))
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _render_report(self, report):
+        self.report_label.configure(
+            text=f"{report['label']}  ·  {report['start']} → {report['end']}", fg=C["muted"])
+
+        gross_col = C["green"] if report["gross_pnl"] >= 0 else C["red"]
+        net_col   = C["green"] if report["net_pnl"]   >= 0 else C["red"]
+        roi_col   = C["green"] if report["roi_pct"]   >= 0 else C["red"]
+        wr_col    = C["green"] if report["wins"] >= report["losses"] else C["red"]
+
+        self.r_trades.set(str(report["num_trades"]))
+        self.r_wr.set(f"{report['win_rate']:.0f}%", f"{report['wins']}W  {report['losses']}L", wr_col)
+        self.r_gross.set(f"{'+' if report['gross_pnl']>=0 else ''}${report['gross_pnl']:.4f}", "", gross_col)
+        self.r_fees.set(f"-${report['fees']:.4f}")
+        self.r_net.set(f"{'+' if report['net_pnl']>=0 else ''}${report['net_pnl']:.4f}", "net after fees", net_col)
+        self.r_roi.set(f"{'+' if report['roi_pct']>=0 else ''}{report['roi_pct']:.2f}%", "", roi_col)
+
+        self.report_tree.delete(*self.report_tree.get_children())
+        for coin, s in report["by_coin"].items():
+            tag = "win" if s["net"] >= 0 else "loss"
+            self.report_tree.insert("", "end", values=(
+                coin, s["n"], f"{'+' if s['gross']>=0 else ''}${s['gross']:.4f}",
+                f"-${s['fees']:.4f}", f"{'+' if s['net']>=0 else ''}${s['net']:.4f}"), tags=(tag,))
+
+        best, worst = report["best_trade"], report["worst_trade"]
+        rows = []
+        if best:
+            rows.append(("Best trade", f"{best['coin']}  net +${best.get('pnl_net',0):.4f}"))
+        if worst:
+            rows.append(("Worst trade", f"{worst['coin']}  net ${worst.get('pnl_net',0):.4f}"))
+        if not rows:
+            rows.append(("—", "No trades in this period"))
+        self._fill_kv(self.report_best_table, rows)
 
     def _build_news(self):
         p = self._page_frames["News"]
@@ -478,6 +587,7 @@ class Dashboard:
         self._load_config()
         self._load_trades()
         self._load_engine_stats()
+        self._load_report()
         self.root.after(0, self._update_clock)
 
     def _load_config(self):

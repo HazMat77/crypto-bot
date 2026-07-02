@@ -125,19 +125,21 @@ if ! $PYTHON_CMD -c "import tkinter" >/dev/null 2>&1; then
 fi
 
 # ── Install Python dependencies ─────────────────────────────────────────────
-echo "  Installing bot dependencies..."
-echo "  (python-kucoin, pandas, requests, beautifulsoup4)"
+# Installed straight from requirements.txt (core + optional) so any package
+# this project adds in the future is picked up automatically — no need to
+# keep this script's package list in sync by hand.
+echo "  Installing bot dependencies from requirements.txt..."
 echo ""
 
 $PYTHON_CMD -m pip install --upgrade pip --quiet
-$PYTHON_CMD -m pip install "python-kucoin==2.1.3" pandas requests beautifulsoup4 --upgrade --quiet
+$PYTHON_CMD -m pip install -r requirements.txt --upgrade --quiet
 
 # If pip refuses due to an externally-managed environment (PEP 668, common on
 # newer Debian/Ubuntu), retry with --break-system-packages or fall back to
 # a virtualenv so the install still succeeds.
 if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests" >/dev/null 2>&1; then
     echo "  Initial install didn't take — retrying with --break-system-packages..."
-    $PYTHON_CMD -m pip install "python-kucoin==2.1.3" pandas requests beautifulsoup4 --upgrade --quiet --break-system-packages 2>/dev/null
+    $PYTHON_CMD -m pip install -r requirements.txt --upgrade --quiet --break-system-packages 2>/dev/null
 
     if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests" >/dev/null 2>&1; then
         echo "  Still failing — creating a virtual environment instead (./venv)..."
@@ -146,13 +148,9 @@ if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests" >/dev/null 2
         source venv/bin/activate
         PYTHON_CMD="$(pwd)/venv/bin/python"
         $PYTHON_CMD -m pip install --upgrade pip --quiet
-        $PYTHON_CMD -m pip install "python-kucoin==2.1.3" pandas requests beautifulsoup4 --upgrade --quiet
+        $PYTHON_CMD -m pip install -r requirements.txt --upgrade --quiet
     fi
 fi
-
-echo "  Installing optional packages (backtesting, charts, dashboard)..."
-$PYTHON_CMD -m pip install ccxt matplotlib streamlit plotly --quiet 2>/dev/null \
-    || $PYTHON_CMD -m pip install ccxt matplotlib streamlit plotly --quiet --break-system-packages 2>/dev/null
 echo "  (optional packages installed where available)"
 echo ""
 
@@ -160,7 +158,7 @@ echo ""
 if ! $PYTHON_CMD -c "import kucoin; import pandas; import requests" >/dev/null 2>&1; then
     echo "  ERROR: Package installation failed."
     echo "  Try running this script with sudo, or install manually:"
-    echo "    $PYTHON_CMD -m pip install --user \"python-kucoin==2.1.3\" pandas requests beautifulsoup4"
+    echo "    $PYTHON_CMD -m pip install --user -r requirements.txt"
     exit 1
 fi
 

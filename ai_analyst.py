@@ -15,8 +15,11 @@ Called by bot.py before every buy or sell. Returns a decision dict:
 
 import json
 import logging
+import random
+import time
 import requests
 import config
+import fake_ai
 from news_aggregator import get_news_summary
 
 log = logging.getLogger(__name__)
@@ -26,13 +29,86 @@ GROK_API_URL      = "https://api.x.ai/v1/chat/completions"
 MODEL_CLAUDE      = "claude-sonnet-4-6"
 MODEL_GROK        = "grok-3"
 
+# ── Hybrid mode bookkeeping ──────────────────────────────────────────────────
+_last_real_call = {}          # {symbol: unix timestamp of last real AI call}
+_hybrid_stats   = {"fake": 0, "real": 0}   # lifetime counters — see get_hybrid_stats()
+
+
+def get_hybrid_stats() -> dict:
+    """Exposed for a /ai_stats-style Telegram command or the heartbeat —
+    how much of the real API cost hybrid mode is actually saving."""
+    total = _hybrid_stats["fake"] + _hybrid_stats["real"]
+    real_pct = (_hybrid_stats["real"] / total * 100) if total else 0.0
+    return {**_hybrid_stats, "total": total, "real_pct": round(real_pct, 1)}
+
+
 def analyse(symbol, action, price, rsi, ma, candles, rsi_signal, mode):
-    """Route to fake AI (paper, free), Claude, or Grok based on config."""
+    """
+    Routes a trade signal to fake AI (local, free), real AI (Claude/Grok),
+    or a cost-optimised hybrid of both — see config.AI_HYBRID_MODE.
+    """
+    coin = symbol.split("-")[0]
+
+    # 1. Paper trading always uses fake AI — unchanged from before hybrid
+    #    mode existed, and unaffected by AI_HYBRID_MODE either way. No real
+    #    API key is needed to exercise the full workflow in paper mode.
     if config.PAPER_TRADING:
-        import fake_ai
         result = fake_ai.analyse(symbol, action, price, rsi, ma, candles, rsi_signal, mode)
+        _hybrid_stats["fake"] += 1
         log.info(f"[FAKE AI] {symbol} {action} → {result['decision']} {result['confidence']}% | {result['reason']}")
         return result
+
+    # 2. Live but explicitly fake-only — cost control, or dry-running
+    #    real-money position sizing/risk logic without spending on API calls.
+    if getattr(config, "LIVE_FAKE_AI_ONLY", False):
+        result = fake_ai.analyse(symbol, action, price, rsi, ma, candles, rsi_signal, mode)
+        _hybrid_stats["fake"] += 1
+        log.info(f"[FAKE AI — LIVE_FAKE_AI_ONLY] {coin} {action} → "
+                f"{result['decision']} ({result['confidence']}%)")
+        return result
+
+    if not config.AI_ENABLED:
+        return {"decision": action, "confidence": 100, "reason": "AI disabled", "approved": True}
+
+    # 3. Hybrid mode disabled — original behaviour, always real AI in live mode.
+    if not getattr(config, "AI_HYBRID_MODE", False):
+        _hybrid_stats["real"] += 1
+        return _real_ai_route(symbol, action, price, rsi, ma, candles, rsi_signal, mode)
+
+    # 4. Hybrid — fake AI evaluates every signal first (free, instant).
+    #    Only escalate to a real API call for signals worth paying for.
+    fake_result = fake_ai.analyse(symbol, action, price, rsi, ma, candles, rsi_signal, mode)
+
+    usage_rate    = getattr(config, "AI_REAL_USAGE_RATE", 0.15)
+    min_conf_real = getattr(config, "AI_MIN_CONFIDENCE_FOR_REAL", 60)
+    cooldown_secs = getattr(config, "AI_REAL_CALL_COOLDOWN_SECS", 3600)
+
+    on_cooldown = (time.time() - _last_real_call.get(symbol, 0)) < cooldown_secs
+
+    should_escalate = (not on_cooldown) and (
+        random.random() < usage_rate or
+        fake_result.get("confidence", 0) >= min_conf_real or
+        fake_result.get("decision") == "HOLD"   # borderline calls most worth a second opinion
+    )
+
+    if not should_escalate:
+        _hybrid_stats["fake"] += 1
+        log.debug(f"[HYBRID] {coin} using fake AI (conf={fake_result['confidence']}%"
+                 f"{', on cooldown' if on_cooldown else ''})")
+        return fake_result
+
+    _last_real_call[symbol] = time.time()
+    _hybrid_stats["real"]  += 1
+    log.info(f"[HYBRID] Escalating {coin} {action} to REAL AI (fake conf: {fake_result['confidence']}%)")
+    real_result = _real_ai_route(symbol, action, price, rsi, ma, candles, rsi_signal, mode)
+
+    if real_result.get("approved") != fake_result.get("approved"):
+        log.info(f"[HYBRID OVERRIDE] {coin}: fake said {fake_result['decision']}, "
+                f"real AI says {real_result['decision']} — using real AI's call")
+    return real_result
+
+
+def _real_ai_route(symbol, action, price, rsi, ma, candles, rsi_signal, mode):
     provider = getattr(config, "AI_PROVIDER", "claude").lower()
     if provider == "grok":
         return _grok_analyse(symbol, action, price, rsi, ma, candles, rsi_signal, mode)

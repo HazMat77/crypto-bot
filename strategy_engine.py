@@ -315,10 +315,35 @@ class PerformanceTracker:
 
     @property
     def expectancy(self) -> float:
-        """Expected value per trade."""
+        """Expected value per trade, in dollars."""
         if not self.trades:
             return 0.0
         return (self.win_rate * self.avg_win) + ((1-self.win_rate) * self.avg_loss)
+
+    @property
+    def avg_win_pct(self) -> float:
+        wins = [t["pnl_pct"] for t in self.trades if t["pnl_net"] >= 0]
+        return sum(wins) / len(wins) if wins else 0.0
+
+    @property
+    def avg_loss_pct(self) -> float:
+        losses = [t["pnl_pct"] for t in self.trades if t["pnl_net"] < 0]
+        return sum(losses) / len(losses) if losses else 0.0
+
+    @property
+    def expectancy_pct(self) -> float:
+        """
+        Expected value per trade as a fraction of position size (not
+        dollars) — used by hybrid_allocator.py to compare a trade's real,
+        track-recorded edge against staking APR on an apples-to-apples
+        %-return basis regardless of position size. Falls back to None
+        (not 0.0 — 0.0 would look like "genuinely breakeven" rather than
+        "no data yet") when there isn't enough trade history to trust,
+        letting the caller fall back to a config-assumed win rate instead.
+        """
+        if len(self.trades) < 10:
+            return None
+        return (self.win_rate * self.avg_win_pct) + ((1 - self.win_rate) * self.avg_loss_pct)
 
     @property
     def profit_factor(self) -> float:
@@ -457,6 +482,26 @@ def evaluate_signal(
         filters_failed.append("news_veto")
         confidence -= 40   # strong news veto = don't trade
 
+    # 5b. Multi-timeframe confirmation — requires the 1h RSI to agree with
+    # (not be at a directional extreme opposing) the 15m entry signal.
+    # Off by default in the sense that it fails OPEN (multi_timeframe_check
+    # itself returns True on any data/network error, same as the ADX/
+    # liquidity checks) — but when MULTI_TIMEFRAME_REQUIRED is True and it
+    # actually gets a clean read that DISAGREES, it's a hard veto like news,
+    # not just a confidence nudge, because "the higher timeframe already
+    # looks played out" is exactly the kind of false-signal 15m alone can't see.
+    if action == "BUY" and getattr(config, "MULTI_TIMEFRAME_CONFIRMATION_ENABLED", True):
+        mtf_ok = filt.multi_timeframe_check(exchange, symbol)
+        if mtf_ok:
+            filters_passed.append("mtf_aligned")
+            confidence += 8
+        else:
+            filters_failed.append("mtf_conflict")
+            confidence -= 15
+            if getattr(config, "MULTI_TIMEFRAME_REQUIRED", False):
+                log.info(f"[ENGINE] {symbol} 1h/15m timeframe conflict — hard veto "
+                        f"(MULTI_TIMEFRAME_REQUIRED=True)")
+
     # 5. Win rate sanity check — don't trade if recent performance is poor
     if len(tracker.trades) >= 10:
         if tracker.win_rate < 0.40:
@@ -492,8 +537,10 @@ def evaluate_signal(
     # the filter-stack score. Keeping these separate prevents double-penalising
     # signals that already passed RSI+MA confirmation.
     threshold = getattr(config, "ENGINE_CONFIDENCE_MIN", 55) if config else 55
+    mtf_required = getattr(config, "MULTI_TIMEFRAME_REQUIRED", False) if config else False
     approved  = confidence >= threshold and "news_veto" not in filters_failed \
-                and "liquidity_thin" not in filters_failed
+                and "liquidity_thin" not in filters_failed \
+                and not (mtf_required and "mtf_conflict" in filters_failed)
 
     reason = (f"TP={tp:.1%} SL={sl:.1%} WR={wr:.0%} "
              f"filters={'✅' if approved else '❌'} "
