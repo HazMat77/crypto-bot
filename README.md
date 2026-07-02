@@ -1,4 +1,4 @@
-# CryptoTradingBot
+# HazMat Crypto Bot
 
 Multi-exchange, multi-coin RSI + MA crypto trading bot with paper/live modes,
 Telegram control, an independent watchdog, self-updating via git, and a

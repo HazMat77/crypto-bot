@@ -1,5 +1,5 @@
 """
-CryptoTradingBot — Modern GUI Dashboard
+HazMat Crypto Bot — Modern GUI Dashboard
 ==========================================
 Dark-themed desktop dashboard styled after software-suite control panels
 (top tab bar, rounded stat cards) rather than a typical sidebar app.
@@ -41,6 +41,9 @@ C = {
     "white":    "#ffffff",
 }
 
+# Fire gradient (deep red -> bright yellow-orange) for the "HazMat" wordmark.
+FIRE_COLORS = ["#7f0000", "#b3001b", "#e8451e", "#ff6f00", "#ff9e00", "#ffc300"]
+
 def _font(win_name, other_name, size, weight=None):
     """
     Cross-platform font picker. Windows gets win_name (e.g. Segoe UI).
@@ -73,6 +76,16 @@ def _lighten(h, amount=30):
     r, g, b = hex_to_rgb(h)
     r = min(255, r+amount); g = min(255, g+amount); b = min(255, b+amount)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _pack_fire_text(parent, text, bg, font, colors=FIRE_COLORS, pady=14):
+    """Packs `text` one character at a time, each colored from a fire
+    gradient, into `parent` (side='left'). Tkinter labels can't render a
+    smooth gradient fill, so this is the practical per-letter stand-in —
+    used for the "HazMat" wordmark so it reads as flame-colored."""
+    for i, ch in enumerate(text):
+        tk.Label(parent, text=ch, bg=bg, fg=colors[i % len(colors)],
+                font=font).pack(side="left", pady=pady)
 
 
 class Card(ctk.CTkFrame):
@@ -133,7 +146,7 @@ class Dashboard:
 
     def __init__(self, root):
         self.root = root
-        root.title("CryptoTradingBot")
+        root.title("HazMat Crypto Bot")
         root.geometry("1280x820")
         root.minsize(960, 640)
         self._bot_proc      = None
@@ -156,11 +169,13 @@ class Dashboard:
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
-        # Logo + title
-        tk.Label(bar, text="⬡", bg=C["surface"], fg=C["blue"],
+        # Logo + title — "HazMat" rendered in a fire gradient, plain white
+        # for the rest of the name.
+        tk.Label(bar, text="🔥", bg=C["surface"], fg=C["orange"],
                 font=("Segoe UI",20) if sys.platform=="win32" else ("SF Pro",20)
-                ).pack(side="left", padx=(18,6), pady=14)
-        tk.Label(bar, text="CryptoTradingBot", bg=C["surface"],
+                ).pack(side="left", padx=(18,4), pady=14)
+        _pack_fire_text(bar, "HazMat", C["surface"], FONT_TITLE)
+        tk.Label(bar, text=" Crypto Bot", bg=C["surface"],
                 fg=C["white"], font=FONT_TITLE).pack(side="left", pady=14)
 
         # Status badge

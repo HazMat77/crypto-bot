@@ -1,6 +1,6 @@
 """
-Bot Dashboard — Streamlit
-==========================
+HazMat Crypto Bot Dashboard — Streamlit
+==========================================
 Live monitoring dashboard for the trading bot.
 
 Run with:
@@ -110,8 +110,8 @@ def _launch_bot_and_watchdog(mode_str: str):
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="CryptoTradingBot",
-    page_icon="🤖",
+    page_title="HazMat Crypto Bot",
+    page_icon="🔥",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -127,6 +127,13 @@ st.markdown("""
     .neg { color: #D85A30; font-weight: 600; }
     .neutral { color: #888780; }
     div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+    .fire-text {
+        background: linear-gradient(90deg, #7f0000, #e8451e, #ff9e00, #ffc300);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-weight: 800;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -219,7 +226,9 @@ def load_news_scores():
 #  SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.sidebar.title("🤖 Bot Dashboard")
+st.sidebar.markdown(
+    '<h1 style="margin-bottom:0;">🔥 <span class="fire-text">HazMat</span> Crypto Bot</h1>',
+    unsafe_allow_html=True)
 st.sidebar.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
 
 page = st.sidebar.radio("Navigation", [

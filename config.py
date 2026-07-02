@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-#  CryptoTradingBot — Configuration
+#  HazMat Crypto Bot — Configuration
 #  
 #  !! SECURITY REMINDER !!
 #  Never share this file or paste these keys into any chat, email, or forum.

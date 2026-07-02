@@ -1,5 +1,5 @@
 ╔════════════════════════════════════════════════════════════════╗
-║                CryptoTradingBot — Android Guide                ║
+║               HazMat Crypto Bot — Android Guide                ║
 ╚════════════════════════════════════════════════════════════════╝
 
 Android runs the bot through Termux (a real Linux terminal app) plus
@@ -87,7 +87,7 @@ Termux + one command is the whole install.
   2. Long-press your home screen
   3. Tap Widgets -> scroll to find Termux Widget
   4. Drag it to your home screen
-  5. You'll see "CryptoTradingBot" as a shortcut — tap it to launch
+  5. You'll see "HazMat Crypto Bot" as a shortcut — tap it to launch
      Termux, start the dashboard, and open it in your browser
 
 

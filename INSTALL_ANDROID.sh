@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-#  CryptoTradingBot — Android (Termux) Setup Script
+#  HazMat Crypto Bot — Android (Termux) Setup Script
 #
 #  This is the ONLY file you need to copy onto your phone by hand —
 #  everything else (the whole bot) gets pulled straight from GitHub.
@@ -31,7 +31,7 @@ BOT_DIR="$HOME/crypto-bot"
 
 echo ""
 echo "  ============================================="
-echo "   CryptoTradingBot — Android (Termux) Setup"
+echo "   HazMat Crypto Bot — Android (Termux) Setup"
 echo "  ============================================="
 echo ""
 
@@ -75,7 +75,7 @@ echo "  Step 4/5: Creating the one-tap launcher..."
 cat > "$BOT_DIR/START_GUI_ANDROID.sh" << 'STARTEOF'
 #!/data/data/com.termux/files/usr/bin/bash
 cd "$HOME/crypto-bot" || exit 1
-echo "Starting CryptoTradingBot dashboard..."
+echo "Starting HazMat Crypto Bot dashboard..."
 echo "(Leave this Termux session running — closing it stops the dashboard.)"
 
 # Launch the web GUI in the background, then open it in the phone's browser.
@@ -97,12 +97,12 @@ chmod +x "$BOT_DIR/START_GUI_ANDROID.sh"
 
 SHORTCUT_DIR="$HOME/.shortcuts"
 mkdir -p "$SHORTCUT_DIR"
-cat > "$SHORTCUT_DIR/CryptoTradingBot" << 'WIDGETEOF'
+cat > "$SHORTCUT_DIR/HazMat Crypto Bot" << 'WIDGETEOF'
 #!/data/data/com.termux/files/usr/bin/bash
 cd "$HOME/crypto-bot" || exit 1
 bash START_GUI_ANDROID.sh
 WIDGETEOF
-chmod +x "$SHORTCUT_DIR/CryptoTradingBot"
+chmod +x "$SHORTCUT_DIR/HazMat Crypto Bot"
 
 # ── Step 5: optional termux-api for auto-opening the browser + notifications ─
 echo ""
@@ -125,7 +125,7 @@ echo ""
 echo "  ONE-TAP HOME SCREEN LAUNCHER:"
 echo "    1. Install 'Termux:Widget' from F-Droid (if you haven't already)"
 echo "    2. Long-press your home screen -> Widgets -> Termux Widget"
-echo "    3. Drag it to your home screen — tap 'CryptoTradingBot' to launch"
+echo "    3. Drag it to your home screen — tap 'HazMat Crypto Bot' to launch"
 echo ""
 echo "  KEEP IT RUNNING WITH THE SCREEN OFF:"
 echo "    Run: termux-wake-lock"

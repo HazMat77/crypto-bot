@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════════════
-#  CryptoTradingBot — Linux Launcher
+#  HazMat Crypto Bot — Linux Launcher
 #  Mirrors START_BOT.bat's menu. Run: ./START_BOT_LINUX.sh
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -8,7 +8,7 @@ cd "$(dirname "$0")" || exit 1
 
 echo ""
 echo "  ============================================="
-echo "   CryptoTradingBot — RSI + MA Strategy"
+echo "   HazMat Crypto Bot — RSI + MA Strategy"
 echo "  ============================================="
 echo ""
 

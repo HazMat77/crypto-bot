@@ -1,5 +1,5 @@
 """
-CryptoTradingBot — Multi-Exchange Multi-Coin RSI + MA Trading Bot
+HazMat Crypto Bot — Multi-Exchange Multi-Coin RSI + MA Trading Bot
 ====================================================================
 - Auto-discovers all coins on each exchange
 - Dynamically scales trade size and coin count based on pool size

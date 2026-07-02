@@ -1,9 +1,9 @@
 @echo off
-title CryptoTradingBot
+title HazMat Crypto Bot
 color 0A
 echo.
 echo  =============================================
-echo   CryptoTradingBot - RSI + MA Trading Bot
+echo   HazMat Crypto Bot - RSI + MA Trading Bot
 echo  =============================================
 echo.
 
@@ -153,10 +153,10 @@ goto DONE
 :: This is what makes "set and forget" actually work — without this, the
 :: watchdog only runs if you remembered to open WATCHDOG.bat yourself in a
 :: second window. Skips launching a duplicate if one is already running.
-tasklist /fi "windowtitle eq CryptoTradingBot Watchdog*" 2>nul | find /i "cmd.exe" >nul
+tasklist /fi "windowtitle eq HazMat Crypto Bot Watchdog*" 2>nul | find /i "cmd.exe" >nul
 if errorlevel 1 (
     echo  Launching watchdog in a separate window...
-    start "CryptoTradingBot Watchdog" cmd /c "cd /d "%~dp0" && WATCHDOG.bat"
+    start "HazMat Crypto Bot Watchdog" cmd /c "cd /d "%~dp0" && WATCHDOG.bat"
 ) else (
     echo  Watchdog already running in another window - not starting a duplicate.
 )

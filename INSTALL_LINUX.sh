@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════════════
-#  CryptoTradingBot — Linux Setup Script
+#  HazMat Crypto Bot — Linux Setup Script
 #
 #  Installs Python (if missing), system packages needed for the GUI/dashboard,
 #  and all Python dependencies. Works on Debian/Ubuntu, Fedora/RHEL, and Arch.
@@ -14,7 +14,7 @@ set -uo pipefail
 
 echo ""
 echo "  ============================================="
-echo "   CryptoTradingBot — Linux Full Automatic Setup"
+echo "   HazMat Crypto Bot — Linux Full Automatic Setup"
 echo "  ============================================="
 echo ""
 echo "  This will install everything needed to run the bot."
@@ -183,7 +183,7 @@ if [[ "$AUTOSTART" =~ ^[Yy]$ ]]; then
     mkdir -p "$SERVICE_DIR"
     cat > "$SERVICE_DIR/kucoin-bot.service" << EOF
 [Unit]
-Description=CryptoTradingBot (paper mode)
+Description=HazMat Crypto Bot (paper mode)
 After=network-online.target
 
 [Service]

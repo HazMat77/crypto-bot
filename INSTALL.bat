@@ -1,9 +1,9 @@
 @echo off
-title CryptoTradingBot - Full Setup
+title HazMat Crypto Bot - Full Setup
 color 0B
 echo.
 echo  =============================================
-echo   CryptoTradingBot - Full Automatic Setup
+echo   HazMat Crypto Bot - Full Automatic Setup
 echo  =============================================
 echo.
 echo  This will install everything needed to run the bot.
@@ -151,7 +151,7 @@ echo  Would you like the bot launcher to open automatically when Windows starts?
 echo.
 set /p STARTUP="  Add to startup? (Y/N): "
 
-set "STARTUP_LINK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\CryptoTradingBot.bat"
+set "STARTUP_LINK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\HazMat Crypto Bot.bat"
 
 if /i "%STARTUP%"=="Y" (
     call :WRITE_STARTUP_LINK
@@ -173,17 +173,17 @@ exit /b 0
 
 :AFTER_STARTUP
 
-:: ── Optional: create a desktop shortcut with the CryptoTradingBot icon ─────────
+:: ── Optional: create a desktop shortcut with the HazMat Crypto Bot icon ─────────
 echo.
-echo  -- Optional: Create a desktop shortcut with the CryptoTradingBot icon --
+echo  -- Optional: Create a desktop shortcut with the HazMat Crypto Bot icon --
 echo.
 set /p MAKESHORTCUT="  Create desktop shortcut? (Y/N): "
 
 if /i "%MAKESHORTCUT%"=="Y" (
     if exist "%~dp0icon.ico" (
-        powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = $ws.SpecialFolders('Desktop'); $lnk = $ws.CreateShortcut(\"$desktop\CryptoTradingBot.lnk\"); $lnk.TargetPath = '%~dp0START_BOT.bat'; $lnk.WorkingDirectory = '%~dp0'; $lnk.IconLocation = '%~dp0icon.ico'; $lnk.Description = 'CryptoTradingBot'; $lnk.Save()"
-        powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = $ws.SpecialFolders('Desktop'); $lnk = $ws.CreateShortcut(\"$desktop\CryptoTradingBot Watchdog.lnk\"); $lnk.TargetPath = '%~dp0WATCHDOG.bat'; $lnk.WorkingDirectory = '%~dp0'; $lnk.IconLocation = '%~dp0icon.ico'; $lnk.Description = 'CryptoTradingBot Watchdog'; $lnk.Save()"
-        powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = $ws.SpecialFolders('Desktop'); if (Test-Path \"$desktop\CryptoTradingBot.lnk\") { exit 0 } else { exit 1 }"
+        powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = $ws.SpecialFolders('Desktop'); $lnk = $ws.CreateShortcut(\"$desktop\HazMat Crypto Bot.lnk\"); $lnk.TargetPath = '%~dp0START_BOT.bat'; $lnk.WorkingDirectory = '%~dp0'; $lnk.IconLocation = '%~dp0icon.ico'; $lnk.Description = 'HazMat Crypto Bot'; $lnk.Save()"
+        powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = $ws.SpecialFolders('Desktop'); $lnk = $ws.CreateShortcut(\"$desktop\HazMat Crypto Bot Watchdog.lnk\"); $lnk.TargetPath = '%~dp0WATCHDOG.bat'; $lnk.WorkingDirectory = '%~dp0'; $lnk.IconLocation = '%~dp0icon.ico'; $lnk.Description = 'HazMat Crypto Bot Watchdog'; $lnk.Save()"
+        powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = $ws.SpecialFolders('Desktop'); if (Test-Path \"$desktop\HazMat Crypto Bot.lnk\") { exit 0 } else { exit 1 }"
         if errorlevel 1 (
             echo  Could not create the shortcut automatically - you can still
             echo  right-click START_BOT.bat -^> Send to -^> Desktop, then
@@ -254,7 +254,7 @@ echo    2. Fill in your KuCoin API Passphrase
 echo    3. Fill in your Telegram token + chat ID (optional)
 echo    4. BACKTEST first: python backtest.py --symbol BTC-USDT --days 90
 echo    5. Double-click START_BOT.bat to launch the bot
-echo      (or use the CryptoTradingBot desktop shortcut, if you created one)
+echo      (or use the HazMat Crypto Bot desktop shortcut, if you created one)
 echo.
 echo  BACKTEST EXAMPLES:
 echo    python backtest.py --symbol BTC-USDT --days 90
