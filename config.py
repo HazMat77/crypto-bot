@@ -657,10 +657,10 @@ NORMAL_MAX_HOLD_HOURS  = 168
 
 # Aggressive pool settings — only active for the "aggressive half"
 # of coins after /aggressive has been sent.
-AGGRESSIVE_RSI_BUY     = 45     # fires more often (wider band)
-AGGRESSIVE_RSI_SELL    = 55     # exits sooner on overbought
-AGGRESSIVE_STOP_LOSS   = 0.1   # 10% — matches global ceiling
-AGGRESSIVE_TAKE_PROFIT = 0.1   # 25% — matches global target
+AGGRESSIVE_RSI_BUY     = 42     # fires more often (wider band)
+AGGRESSIVE_RSI_SELL    = 58     # exits sooner on overbought
+AGGRESSIVE_STOP_LOSS   = 0.08   # 10% — matches global ceiling
+AGGRESSIVE_TAKE_PROFIT = 0.08   # 25% — matches global target
 AGGRESSIVE_TRAILING_STOP = 0.04 # 4% trailing
 AGGRESSIVE_MAX_HOLD_HOURS = 24  # shorter hold — take profits faster
 
@@ -751,3 +751,5 @@ STAKING_SUPPORTED_EXCHANGES = {"binance", "bybit", "okx", "kucoin", "gateio", "k
 # Auto-adapted to BULL_WEAK regime (2026-07-02 15:56)
 
 # Auto-adapted to BULL_WEAK regime (2026-07-02 16:14)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 17:26)
