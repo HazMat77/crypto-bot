@@ -83,7 +83,13 @@ MIN_TRADE_USDT = 8.0
 TRADE_PCT      = 0.92
 
 # ── Coin discovery filters ─────────────────────────────────────────────────
-MIN_VOLUME_USDT  = 100_000
+# Lowered from 100_000: at $100k, thinner exchanges (Coinbase, Kraken) had
+# fewer than 15 pairs clear the bar (9 and 13 respectively) even though the
+# Starter tier's ceiling is 15 coins for every exchange — so the bot ended
+# up watching fewer coins than it was actually funded/tiered for on those
+# exchanges. $25k still screens out dead/illiquid pairs but leaves enough
+# candidates on every exchange to fill out the tier's coin count.
+MIN_VOLUME_USDT  = 25_000
 EXCLUDE_KEYWORDS = [
     "UP","DOWN","BULL","BEAR","3L","3S","2L","2S",
     "USDC","BUSD","DAI","TUSD","USDT","FDUSD","USDP",
