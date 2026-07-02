@@ -96,7 +96,26 @@ def _launch_bot_and_watchdog(mode_str: str):
     """Launches bot.py in the given mode and watchdog.py alongside it, as
     detached background processes — same Popen pattern watchdog.py's own
     auto-restart uses. Tracks PIDs in session_state so a second click
-    within this browser session doesn't stack up duplicate watchdogs."""
+    within this browser session doesn't stack up duplicate watchdogs.
+
+    On Android (HAZMAT_ANDROID env var): subprocess.Popen can't spawn a new
+    Python interpreter, so bot.py is executed in a daemon thread instead.
+    The watchdog is skipped — BotService (START_STICKY) keeps the process alive.
+    """
+    # ── Android path: run bot.py as a thread ─────────────────────────────
+    if os.environ.get("HAZMAT_ANDROID"):
+        import threading, runpy as _rp
+        bot_path = str(Path("bot.py").resolve())
+        def _run_bot():
+            sys.argv = ["bot.py", "--mode", mode_str]
+            _rp.run_path(bot_path, run_name="__main__")
+        t = threading.Thread(target=_run_bot, daemon=True, name="hazmat-bot")
+        t.start()
+        # Use the current process PID so _pid_alive() considers the bot running
+        st.session_state["bot_pid"] = os.getpid()
+        return  # watchdog not needed — Android service keeps process alive
+
+    # ── Desktop path: original subprocess launch ─────────────────────────
     python_cmd    = sys.executable
     bot_path      = str(Path("bot.py").resolve())
     watchdog_path = str(Path("watchdog.py").resolve())
