@@ -347,7 +347,7 @@ AI_API_KEY        = _secrets.AI_API_KEY
 AI_MODE           = "alongside"   # "alongside" | "filter" | "full"
 AI_NEWS_SEARCH    = True          # FREE — reads RSS from The Block, CoinDesk, Blockworks,
                                   # Cointelegraph, The Defiant. No API key needed.
-AI_CONFIDENCE_MIN = 70
+AI_CONFIDENCE_MIN = 63
 
 # ── Strategy engine approval threshold ─────────────────────────────────────
 # Separate from AI_CONFIDENCE_MIN above. This gates the strategy_engine.py
@@ -643,7 +643,7 @@ AUTO_APPLY_REQUIRE_APPROVAL_PCT  = 0.15   # >=15% relative change always asks fi
 DUAL_POOL_ENABLED      = False   # OFF by default — 100% safe mode, no split.
                                   # /aggressive sets this True (and the 50/50 ratio).
                                   # /safe sets this back to False.
-AGGRESSIVE_POOL_PCT    = 0.3    # Only used when DUAL_POOL_ENABLED=True — default 70/30 split
+AGGRESSIVE_POOL_PCT    = 0.2    # Only used when DUAL_POOL_ENABLED=True — default 70/30 split
 
 # Safe pool settings — these are the ACTIVE settings whenever
 # DUAL_POOL_ENABLED is False (the default), and also the "safe half"
@@ -657,10 +657,10 @@ NORMAL_MAX_HOLD_HOURS  = 168
 
 # Aggressive pool settings — only active for the "aggressive half"
 # of coins after /aggressive has been sent.
-AGGRESSIVE_RSI_BUY     = 42     # fires more often (wider band)
-AGGRESSIVE_RSI_SELL    = 58     # exits sooner on overbought
-AGGRESSIVE_STOP_LOSS   = 0.08   # 10% — matches global ceiling
-AGGRESSIVE_TAKE_PROFIT = 0.08   # 25% — matches global target
+AGGRESSIVE_RSI_BUY     = 45     # fires more often (wider band)
+AGGRESSIVE_RSI_SELL    = 55     # exits sooner on overbought
+AGGRESSIVE_STOP_LOSS   = 0.1   # 10% — matches global ceiling
+AGGRESSIVE_TAKE_PROFIT = 0.1   # 25% — matches global target
 AGGRESSIVE_TRAILING_STOP = 0.04 # 4% trailing
 AGGRESSIVE_MAX_HOLD_HOURS = 24  # shorter hold — take profits faster
 
@@ -753,3 +753,9 @@ STAKING_SUPPORTED_EXCHANGES = {"binance", "bybit", "okx", "kucoin", "gateio", "k
 # Auto-adapted to BULL_WEAK regime (2026-07-02 16:14)
 
 # Auto-adapted to BULL_WEAK regime (2026-07-02 17:26)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 17:48)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 17:53)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 19:59)

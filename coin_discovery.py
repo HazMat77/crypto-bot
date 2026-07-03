@@ -291,14 +291,23 @@ def discover_coinbase(min_volume: float, exclude_keywords: list) -> list:
         )
         data = resp.json().get("products", [])
         pairs = []
+        seen = set()
         for p in data:
             pid = p.get("product_id", "")
-            if not pid.endswith("-USDT"):
+            # Accept both -USD and -USDT pairs; normalise to -USDT for the bot
+            if pid.endswith("-USDT"):
+                symbol = pid
+            elif pid.endswith("-USD"):
+                symbol = pid[:-4] + "-USDT"
+            else:
                 continue
             if p.get("is_disabled") or p.get("trading_disabled") or p.get("status") != "online":
                 continue
-            if should_exclude(pid, exclude_keywords):
+            if should_exclude(symbol, exclude_keywords):
                 continue
+            if symbol in seen:
+                continue
+            seen.add(symbol)
             try:
                 price    = float(p.get("price", 0) or 0)
                 base_vol = float(p.get("volume_24h", 0) or 0)
@@ -307,7 +316,7 @@ def discover_coinbase(min_volume: float, exclude_keywords: list) -> list:
                 continue
             if vol_usdt < min_volume:
                 continue
-            pairs.append((pid, vol_usdt))
+            pairs.append((symbol, vol_usdt))
         pairs.sort(key=lambda x: x[1], reverse=True)
         log.info(f"[COINBASE DISCOVER] Found {len(pairs)} qualifying pairs")
         return pairs

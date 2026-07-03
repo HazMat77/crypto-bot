@@ -2180,7 +2180,10 @@ class CoinbaseExchange(BaseExchange):
         super().__init__("coinbase", credentials)
 
     def normalize_symbol(self, symbol):
-        return symbol   # Coinbase uses BTC-USDT natively
+        # Bot uses BTC-USDT internally; Coinbase trades BTC-USD
+        if symbol.endswith("-USDT"):
+            return symbol[:-5] + "-USD"
+        return symbol
 
     def _jwt(self, method, path):
         """Build a per-request JWT for Coinbase Advanced Trade API auth (Ed25519/EdDSA)."""
@@ -2265,7 +2268,7 @@ class CoinbaseExchange(BaseExchange):
         path = "/api/v3/brokerage/best_bid_ask"
         resp = requests.get(
             f"{self.BASE}{path}",
-            params={"product_ids": symbol},
+            params={"product_ids": self.normalize_symbol(symbol)},
             headers=self._auth_headers("GET", path),
             timeout=10,
         )
@@ -2300,7 +2303,7 @@ class CoinbaseExchange(BaseExchange):
         gran  = granularity_map.get(interval, "FIFTEEN_MINUTE")
         end   = int(time.time())
         start = end - secs_map[gran] * limit
-        path  = f"/api/v3/brokerage/products/{symbol}/candles"
+        path  = f"/api/v3/brokerage/products/{self.normalize_symbol(symbol)}/candles"
         resp  = requests.get(
             f"{self.BASE}{path}",
             params={"start": str(start), "end": str(end),
@@ -2324,7 +2327,7 @@ class CoinbaseExchange(BaseExchange):
         path = "/api/v3/brokerage/orders"
         body = _json.dumps({
             "client_order_id": f"bot_{int(time.time() * 1000)}",
-            "product_id": symbol,
+            "product_id": self.normalize_symbol(symbol),
             "side": "BUY",
             "order_configuration": {
                 "market_market_ioc": {"quote_size": str(round(usdt_amount, 2))}
@@ -2341,7 +2344,7 @@ class CoinbaseExchange(BaseExchange):
         path = "/api/v3/brokerage/orders"
         body = _json.dumps({
             "client_order_id": f"bot_{int(time.time() * 1000)}",
-            "product_id": symbol,
+            "product_id": self.normalize_symbol(symbol),
             "side": "SELL",
             "order_configuration": {
                 "market_market_ioc": {"base_size": str(qty)}
