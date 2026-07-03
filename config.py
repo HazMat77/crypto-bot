@@ -503,7 +503,7 @@ CORRELATION_AWARE_SELECTION = True
 # next-best alternative. Lower = stricter diversification (more coins
 # rejected), higher = more permissive. Only has any effect when
 # CORRELATION_AWARE_SELECTION is True.
-CORRELATION_CAP = 0.78
+CORRELATION_CAP = 0.92
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MONTHLY AI STRATEGY SELF-IMPROVEMENT
