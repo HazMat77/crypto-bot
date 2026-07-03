@@ -1148,9 +1148,15 @@ def coin_worker(ex_name, exchange, symbol, mode, stop_event):
                         log.info(f"[{tag}] {pool_label} 📉 DIP-BUY exit "
                                 f"({dipbuy_exit['exit_type']}): {dipbuy_exit['reason']}")
                 else:
-                    rsi_sell = rsi > params["rsi_sell"] and price < ma
+                    # Aggressive pool skips the MA gate on sells too — sell on RSI alone
+                    if pool_type == "aggressive":
+                        rsi_sell = rsi > params["rsi_sell"]
+                    else:
+                        rsi_sell = rsi > params["rsi_sell"] and price < ma
 
-                if rsi_sell or ai_mode == "full":
+                # AI only gets to evaluate a sell when RSI has actually fired —
+                # prevents buying and immediately selling in the same cycle
+                if rsi_sell:
                     news_sent = "unknown"
                     if config.AI_ENABLED:
                         ai_result = ai_analyst.analyse(
