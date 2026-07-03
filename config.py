@@ -101,8 +101,8 @@ RSI_PERIOD = 14
 # PAPER TESTING:  RSI_BUY = 45, RSI_SELL = 55  (more signals to test with)
 # LIVE TRADING:   RSI_BUY = 35, RSI_SELL = 65  (conservative, less false signals)
 # Currently set for LIVE — change back to 45/55 if you want more paper test signals
-RSI_BUY    = 37
-RSI_SELL   = 65
+RSI_BUY    = 45
+RSI_SELL   = 62
 
 # ── Moving Average ─────────────────────────────────────────────────────────
 MA_PERIOD = 20
@@ -643,15 +643,15 @@ AUTO_APPLY_REQUIRE_APPROVAL_PCT  = 0.15   # >=15% relative change always asks fi
 DUAL_POOL_ENABLED      = False   # OFF by default — 100% safe mode, no split.
                                   # /aggressive sets this True (and the 50/50 ratio).
                                   # /safe sets this back to False.
-AGGRESSIVE_POOL_PCT    = 0.2    # Only used when DUAL_POOL_ENABLED=True — default 70/30 split
+AGGRESSIVE_POOL_PCT    = 0.1    # Only used when DUAL_POOL_ENABLED=True — default 70/30 split
 
 # Safe pool settings — these are the ACTIVE settings whenever
 # DUAL_POOL_ENABLED is False (the default), and also the "safe half"
 # whenever /aggressive is active.
-NORMAL_RSI_BUY         = 37
-NORMAL_RSI_SELL        = 65
-NORMAL_STOP_LOSS       = 0.08    # 4% — measured from peak, see risk_manager.py
-NORMAL_TAKE_PROFIT     = 0.2    # 25% — from entry
+NORMAL_RSI_BUY         = 40
+NORMAL_RSI_SELL        = 62
+NORMAL_STOP_LOSS       = 0.05    # 4% — measured from peak, see risk_manager.py
+NORMAL_TAKE_PROFIT     = 0.15    # 25% — from entry
 NORMAL_TRAILING_STOP   = 0.03    # 3%
 NORMAL_MAX_HOLD_HOURS  = 168
 
@@ -759,3 +759,7 @@ STAKING_SUPPORTED_EXCHANGES = {"binance", "bybit", "okx", "kucoin", "gateio", "k
 # Auto-adapted to BULL_WEAK regime (2026-07-02 17:53)
 
 # Auto-adapted to BULL_WEAK regime (2026-07-02 19:59)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-02 21:41)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-02 23:13)

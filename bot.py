@@ -1010,7 +1010,11 @@ def coin_worker(ex_name, exchange, symbol, mode, stop_event):
                         log.info(f"[{tag}] {pool_label} 🔻 DIP-BUY mode ({regime_name}): "
                                 f"{dipbuy_result['reason']}")
                 else:
-                    rsi_buy = rsi < params["rsi_buy"] and price > ma
+                    # Aggressive pool skips the MA gate — buy on RSI alone
+                    if pool_type == "aggressive":
+                        rsi_buy = rsi < params["rsi_buy"]
+                    else:
+                        rsi_buy = rsi < params["rsi_buy"] and price > ma
 
                 if rsi_buy:
                     # Run adaptive strategy engine (filters + calibrated TP/SL)
