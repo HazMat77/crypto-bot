@@ -812,16 +812,20 @@ class Dashboard:
                     if "SELL" in line and "Net" in line: trades.append(line.strip())
                     elif "SIGNAL" in line or "ENGINE" in line: signals.append(line.strip())
 
-        wins   = sum(1 for t in trades if "Net +$" in t)
+        wins   = sum(1 for t in trades if "Net $+" in t or "Net +$" in t)
         losses = len(trades) - wins
         wr_str = f"{wins/len(trades)*100:.0f}%" if trades else "—"
 
         # Parse net P&L from each SELL log line to compute daily ROI
+        # Handles both "Net $-0.01" and "Net -$0.01" formats
         net_pnl = 0.0
         for t in trades:
-            m = re.search(r'Net ([+-])\$([0-9.]+)', t)
+            m = re.search(r'Net \$([+-][0-9.]+)', t) or re.search(r'Net ([+-])\$([0-9.]+)', t)
             if m:
-                net_pnl += (1 if m.group(1) == "+" else -1) * float(m.group(2))
+                if m.lastindex == 1:
+                    net_pnl += float(m.group(1))
+                else:
+                    net_pnl += (1 if m.group(1) == "+" else -1) * float(m.group(2))
 
         try:
             import config as _cfg
