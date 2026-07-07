@@ -101,8 +101,8 @@ RSI_PERIOD = 14
 # PAPER TESTING:  RSI_BUY = 45, RSI_SELL = 55  (more signals to test with)
 # LIVE TRADING:   RSI_BUY = 35, RSI_SELL = 65  (conservative, less false signals)
 # Currently set for LIVE — change back to 45/55 if you want more paper test signals
-RSI_BUY    = 45
-RSI_SELL   = 62
+RSI_BUY    = 32
+RSI_SELL   = 68
 
 # ── Moving Average ─────────────────────────────────────────────────────────
 MA_PERIOD = 20
@@ -355,7 +355,7 @@ AI_CONFIDENCE_MIN = 63
 # triggered a signal. Keep this lower than AI_CONFIDENCE_MIN since the
 # signal has already been confirmed once before reaching this check.
 # If trades are rarely firing, lower this first before touching RSI thresholds.
-ENGINE_CONFIDENCE_MIN = 55
+ENGINE_CONFIDENCE_MIN = 50
 
 # ── Multi-timeframe confirmation ────────────────────────────────────────────
 # Checks the 1h RSI isn't at a directional extreme (outside 30-70) that
@@ -425,7 +425,7 @@ LIVE_FAKE_AI_ONLY = False   # flip True during high-volatility periods for cost 
 # ══════════════════════════════════════════════════════════════════════════════
 
 HYBRID_OPTIMIZER_ENABLED     = True
-HYBRID_MIN_EDGE_OVER_STAKING = 0.008   # require a trade's edge to beat staking by at least
+HYBRID_MIN_EDGE_OVER_STAKING = 0.001   # require a trade's edge to beat staking by at least
                                       # this many extra percentage points (0 = just beat it)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -640,27 +640,27 @@ AUTO_APPLY_REQUIRE_APPROVAL_PCT  = 0.15   # >=15% relative change always asks fi
 #  only affects which risk settings each coin trades under.
 # ══════════════════════════════════════════════════════════════════════════════
 
-DUAL_POOL_ENABLED      = False   # OFF by default — 100% safe mode, no split.
+DUAL_POOL_ENABLED      = True   # OFF by default — 100% safe mode, no split.
                                   # /aggressive sets this True (and the 50/50 ratio).
                                   # /safe sets this back to False.
-AGGRESSIVE_POOL_PCT    = 0.1    # Only used when DUAL_POOL_ENABLED=True — default 70/30 split
+AGGRESSIVE_POOL_PCT    = 0.3    # Only used when DUAL_POOL_ENABLED=True — default 70/30 split
 
 # Safe pool settings — these are the ACTIVE settings whenever
 # DUAL_POOL_ENABLED is False (the default), and also the "safe half"
 # whenever /aggressive is active.
-NORMAL_RSI_BUY         = 40
-NORMAL_RSI_SELL        = 62
-NORMAL_STOP_LOSS       = 0.05    # 4% — measured from peak, see risk_manager.py
-NORMAL_TAKE_PROFIT     = 0.15    # 25% — from entry
+NORMAL_RSI_BUY         = 32
+NORMAL_RSI_SELL        = 68
+NORMAL_STOP_LOSS       = 0.02    # 4% — measured from peak, see risk_manager.py
+NORMAL_TAKE_PROFIT     = 0.04    # 25% — from entry
 NORMAL_TRAILING_STOP   = 0.03    # 3%
 NORMAL_MAX_HOLD_HOURS  = 168
 
 # Aggressive pool settings — only active for the "aggressive half"
 # of coins after /aggressive has been sent.
-AGGRESSIVE_RSI_BUY     = 45     # fires more often (wider band)
-AGGRESSIVE_RSI_SELL    = 55     # exits sooner on overbought
-AGGRESSIVE_STOP_LOSS   = 0.1   # 10% — matches global ceiling
-AGGRESSIVE_TAKE_PROFIT = 0.1   # 25% — matches global target
+AGGRESSIVE_RSI_BUY     = 40     # fires more often (wider band)
+AGGRESSIVE_RSI_SELL    = 60     # exits sooner on overbought
+AGGRESSIVE_STOP_LOSS   = 0.07   # 10% — matches global ceiling
+AGGRESSIVE_TAKE_PROFIT = 0.07   # 25% — matches global target
 AGGRESSIVE_TRAILING_STOP = 0.04 # 4% trailing
 AGGRESSIVE_MAX_HOLD_HOURS = 24  # shorter hold — take profits faster
 
@@ -763,3 +763,47 @@ STAKING_SUPPORTED_EXCHANGES = {"binance", "bybit", "okx", "kucoin", "gateio", "k
 # Auto-adapted to BULL_WEAK regime (2026-07-02 21:41)
 
 # Auto-adapted to SIDEWAYS regime (2026-07-02 23:13)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-03 00:32)
+
+# Mode switch via Telegram 2026-07-03 00:40
+
+# Auto-adapted to BULL_WEAK regime (2026-07-03 08:07)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-03 08:33)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-03 09:33)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-03 10:01)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-03 10:42)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-03 13:15)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-03 14:12)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-03 15:17)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-03 16:51)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-04 21:55)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-05 19:17)
+
+# Auto-adapted to BULL_STRONG regime (2026-07-06 17:58)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-06 20:27)
+
+# Auto-adapted to BULL_STRONG regime (2026-07-07 05:28)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-07 06:28)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-07 12:28)
+
+# Auto-adapted to BULL_STRONG regime (2026-07-07 12:58)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-07 13:28)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-07 14:58)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-07 18:12)
