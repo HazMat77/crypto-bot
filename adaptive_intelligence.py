@@ -81,17 +81,17 @@ REGIME_STRATEGIES = {
         "description": "Mild bull — standard settings with slight bias to hold",
     },
     "SIDEWAYS": {
-        "rsi_buy":              40,    # was 33 — raised so signals actually fire in ranging markets
-        "rsi_sell":             62,    # exit sooner — no trend to ride
-        "stop_loss_pct":        0.05,  # tight stop — choppy = quick reversals, well under ceiling
-        "take_profit_pct":      0.15,  # quick profit — don't wait for trend, smaller target than trending regimes
-        "trailing_stop_pct":    0.02,  # tight trail — lock in small gains fast
-        "max_hold_hours":       24,    # get in and out quickly
-        "position_size_mult":   0.7,   # smaller bets — no clear direction
+        "rsi_buy":              32,    # only buy when genuinely oversold — RSI 40 buys mid-range, burns fees
+        "rsi_sell":             68,    # only sell when genuinely overbought — symmetric with buy
+        "stop_loss_pct":        0.02,  # 2% stop — smaller than TP so wins beat losses
+        "take_profit_pct":      0.04,  # 4% TP — sideways coins don't move 15%, take small wins fast
+        "trailing_stop_pct":    0.015, # tight trail — lock in gains quickly
+        "max_hold_hours":       12,    # short holds — don't get trapped in chop
+        "position_size_mult":   0.6,   # smaller bets — no clear direction
         "min_adx":              25,    # higher ADX req — need real signals
         "volume_threshold":     1.5,   # strict volume — avoid false breakouts
-        "aggressive_pct":       0.10,  # reduce aggressive pool
-        "description": "Choppy market — tight ranges, quick in/out, small sizes",
+        "aggressive_pct":       0.30,  # keep meaningful aggressive allocation
+        "description": "Choppy market — only extreme RSI entries, quick small-profit scalps",
     },
     "BEAR_WEAK": {
         "rsi_buy":              35,    # was 30 — raised so signals fire in mild downtrends
