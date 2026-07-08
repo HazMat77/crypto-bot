@@ -17,17 +17,28 @@ DATA & ANALYTICS PLATFORMS (public APIs, free):
   9. Messari          — institutional research, screeners
  10. Glassnode        — on-chain metrics (exchange inflows/outflows)
 
-All news cached per coin for 1 hour.
-All market data cached globally for 30 minutes.
-Zero cost — all public endpoints.
+All news cached per coin for 10 minutes.
+All market data cached globally for 15 minutes.
+Headlines are de-duplicated across outlets and weighted by recency and
+per-source credibility before scoring. Zero cost — all public endpoints,
+unless AI_SENTIMENT_ENABLED is turned on in config.py (adds a Claude API
+call per scoring pass).
 """
 
+import difflib
+import json
 import logging
+import os
+import re
 import threading
 import time
+from email.utils import parsedate_to_datetime
+
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+
+import config
 
 log = logging.getLogger(__name__)
 
@@ -101,13 +112,16 @@ DATA_SOURCES = {
 }
 
 # ── Caches ─────────────────────────────────────────────────────────────────
+# Kept short deliberately — these are refreshed on every dashboard load /
+# strategy tick, and RSS feeds themselves rarely publish faster than this
+# anyway, so there's little value (and real rate-limit risk) in going lower.
 _news_cache      = {}          # { coin: { headlines, fetched_at } }
 _cache_lock      = threading.Lock()
-_CACHE_TTL       = timedelta(hours=1)
+_CACHE_TTL       = timedelta(minutes=10)
 
 _market_cache    = {"data": {}, "fetched_at": datetime.min}
 _market_lock     = threading.Lock()
-_MARKET_CACHE_TTL = timedelta(minutes=30)
+_MARKET_CACHE_TTL = timedelta(minutes=15)
 
 # Sentiment keywords with weights
 POSITIVE_KW = {
@@ -124,6 +138,16 @@ NEGATIVE_KW = {
     "falls":-1.0,"drops":-1.0,"plunge":-2.0,"concern":-1.0,"warning":-1.5,
     "delisting":-3.0,"stolen":-2.5,"rug":-3.0,"liquidat":-2.0,
 }
+
+# Words that flip the meaning of a keyword match within the same line —
+# without this, "no crash," "avoided a hack," or "denies fraud" score just
+# as negative as an actual crash/hack/fraud headline.
+NEGATION_WORDS = {
+    "no", "not", "never", "denies", "denied", "avoids", "avoided", "avert",
+    "averted", "isn't", "wasn't", "won't", "didn't", "doesn't", "without",
+    "unlikely", "rules out", "despite", "rejects", "rejected",
+}
+_NEGATION_WINDOW = 40   # chars to look back before a keyword match
 
 COIN_ALIASES = {
     "BTC":["bitcoin","btc"],"ETH":["ethereum","eth","ether"],
@@ -142,8 +166,25 @@ COIN_ALIASES = {
 #  RSS FETCHING
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _parse_pubdate(raw: str):
+    """Best-effort parse of an RSS pubDate (RFC 822) or Atom updated/
+    published (ISO 8601) timestamp. Returns None on anything unparseable
+    rather than raising — a missing/odd date shouldn't break scoring,
+    it just means that headline falls back to a neutral recency weight."""
+    if not raw:
+        return None
+    try:
+        return parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def _fetch_rss(url: str, timeout: int = 10) -> list:
-    """Fetch and parse RSS feed. Returns list of (title, description, source_weight) tuples."""
+    """Fetch and parse RSS feed. Returns list of (title, description, published_at) tuples — published_at is a datetime or None."""
     try:
         if HAS_RETRY:
             resp = fetch_with_retry(url, headers={
@@ -164,10 +205,10 @@ def _fetch_rss(url: str, timeout: int = 10) -> list:
             title = item.findtext("title", "").strip()
             desc  = item.findtext("description", "").strip()
             # Strip HTML from description
-            import re
             desc = re.sub(r"<[^>]+>", " ", desc)[:300]
+            pub_dt = _parse_pubdate(item.findtext("pubDate", ""))
             if title and len(title) > 5:
-                items.append((title, desc))
+                items.append((title, desc, pub_dt))
 
         if not items:
             # Atom format fallback
@@ -175,13 +216,53 @@ def _fetch_rss(url: str, timeout: int = 10) -> list:
             for entry in root.findall(".//a:entry", ns)[:15]:
                 title = entry.findtext("a:title", "", ns).strip()
                 desc  = entry.findtext("a:summary", "", ns).strip()[:300]
+                pub_raw = (entry.findtext("a:updated", "", ns)
+                          or entry.findtext("a:published", "", ns))
+                pub_dt  = _parse_pubdate(pub_raw)
                 if title:
-                    items.append((title, desc))
+                    items.append((title, desc, pub_dt))
 
         return items
     except Exception as e:
         log.debug(f"[NEWS] RSS fetch failed {url}: {e}")
         return []
+
+
+def _recency_weight(pub_dt) -> float:
+    """Older headlines count for less — a story published minutes ago
+    should move a coin's score far more than one still sitting in the
+    cache from ~an hour ago. Unknown-age headlines get a flat mid-weight
+    rather than being discarded or treated as fresh."""
+    if pub_dt is None:
+        return 0.7
+    try:
+        now = datetime.now(pub_dt.tzinfo)
+        age_hours = (now - pub_dt).total_seconds() / 3600
+    except Exception:
+        return 0.7
+    if age_hours < 0:
+        return 1.0
+    return max(0.15, 1.0 - age_hours / 24)
+
+
+def _dedupe_headlines(items: list) -> list:
+    """Collapses near-identical headlines that multiple outlets ran on
+    the same story — without this, one event gets counted several times
+    over just because more outlets covered it, not because sentiment
+    toward the coin is actually stronger. Keeps the first (usually
+    highest-weighted-source) occurrence of each story."""
+    seen    = []
+    deduped = []
+    for item in items:
+        title = item[0]
+        norm  = re.sub(r"[^a-z0-9 ]", "", title.lower()).strip()
+        if not norm:
+            continue
+        if any(difflib.SequenceMatcher(None, norm, s).ratio() > 0.80 for s in seen):
+            continue
+        seen.append(norm)
+        deduped.append(item)
+    return deduped
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -290,15 +371,30 @@ def get_market_context() -> dict:
 #  NEWS SCORING
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _is_negated(line: str, match_idx: int) -> bool:
+    """Checks the text just before a keyword match for a negation word,
+    e.g. "no crash", "denies fraud", "avoided a hack" — without this,
+    those score exactly as bearish as an actual crash/fraud/hack headline."""
+    start   = max(0, match_idx - _NEGATION_WINDOW)
+    context = line[start:match_idx]
+    return any(f" {neg} " in f" {context} " for neg in NEGATION_WORDS)
+
+
 def _score_line(line: str, weight: float = 1.0) -> float:
-    """Score a single line of text for sentiment."""
+    """Score a single line of text for sentiment. A keyword preceded by a
+    negation word within _NEGATION_WINDOW chars has its contribution
+    flipped instead of counted at face value."""
     score = 0.0
     for kw, w in POSITIVE_KW.items():
-        if kw in line:
-            score += w * weight
+        idx = line.find(kw)
+        if idx != -1:
+            contribution = w * weight
+            score += -contribution if _is_negated(line, idx) else contribution
     for kw, w in NEGATIVE_KW.items():
-        if kw in line:
-            score += w * weight   # w is negative
+        idx = line.find(kw)
+        if idx != -1:
+            contribution = w * weight   # w is negative
+            score += -contribution if _is_negated(line, idx) else contribution
     return score
 
 
@@ -317,7 +413,7 @@ def fetch_market_news() -> str:
     """
     Fetch general market headlines from all 6 news sources.
     Returns formatted string for AI prompt context.
-    Cached 1 hour.
+    Cached 10 minutes.
     """
     with _market_lock:
         cached = _market_cache.get("news_text", "")
@@ -328,13 +424,16 @@ def fetch_market_news() -> str:
     log.info("[NEWS] Fetching from 6 news sources + 3 data platforms...")
     sections = []
 
-    # News RSS sources
+    # News RSS sources — de-duped and newest-first so the AI prompt leads
+    # with what's actually fresh rather than whatever order the feed returns.
     for source_name, info in NEWS_SOURCES.items():
         items = _fetch_rss(info["rss"])
         if not items:
             items = _fetch_rss(info["backup"])
+        items = _dedupe_headlines(items)
+        items.sort(key=lambda it: it[2].timestamp() if it[2] else 0, reverse=True)
         if items:
-            headlines = "\n".join(f"• {t}" for t, _ in items[:3])
+            headlines = "\n".join(f"• {t}" for t, _, _ in items[:3])
             sections.append(f"[{source_name}]\n{headlines}")
 
     # Messari institutional news
@@ -371,7 +470,7 @@ def fetch_coin_news(coin: str) -> str:
     """
     Fetch news and data signals relevant to a specific coin.
     Combines RSS headlines + CoinGecko trending + CMC momentum.
-    Cached per coin for 1 hour.
+    Cached per coin for 10 minutes.
     """
     coin_upper = coin.upper()
 
@@ -389,10 +488,11 @@ def fetch_coin_news(coin: str) -> str:
         items = _fetch_rss(info["rss"])
         if not items:
             items = _fetch_rss(info["backup"])
+        items  = _dedupe_headlines(items)
         weight = info.get("weight", 1.0)
-        for title, desc in items:
+        for title, desc, pub_dt in items:
             if _coin_mentioned(f"{title} {desc}", coin_upper):
-                relevant.append((source_name, title, weight))
+                relevant.append((source_name, title, weight * _recency_weight(pub_dt)))
             elif len(market_ctx) < 4:
                 market_ctx.append((source_name, title))
 
@@ -471,6 +571,13 @@ def score_coins_by_news_and_data(symbols: list) -> dict:
     Score coins using news sentiment + data platform signals.
     Returns { "BTC": 3.2, "ETH": 2.1, "DOGE": -1.4, ... }
     Higher = more bullish signals.
+
+    Headlines are pulled straight from each source (not the pre-formatted
+    fetch_market_news() text) so per-source credibility weight and recency
+    decay can actually be applied, and are de-duplicated across outlets
+    first so one story doesn't get counted 3-6x just because several
+    outlets ran it. If config.AI_SENTIMENT_ENABLED is set, the keyword
+    score is blended with a Claude-based read of the same headlines.
     """
     try:
         ctx          = get_market_context()
@@ -479,9 +586,21 @@ def score_coins_by_news_and_data(symbols: list) -> dict:
         mkt_change   = ctx.get("market_change_24h", 0)
         scores       = {}
 
-        # Fetch all news
-        all_text  = fetch_market_news().lower()
-        lines     = all_text.split("\n")
+        # Gather every headline from every source once, tagged with its
+        # source credibility weight and publish time, then de-dupe across
+        # outlets before scoring.
+        raw_items = []
+        for source_name, info in NEWS_SOURCES.items():
+            items = _fetch_rss(info["rss"])
+            if not items:
+                items = _fetch_rss(info["backup"])
+            weight = info.get("weight", 1.0)
+            for title, desc, pub_dt in items:
+                raw_items.append((title, desc, pub_dt, weight))
+        for title, desc in _fetch_messari_news():
+            raw_items.append((title, desc, None, 1.5))
+
+        raw_items = _dedupe_headlines(raw_items)
 
         for sym in symbols:
             coin    = sym.split("-")[0].upper()
@@ -490,10 +609,12 @@ def score_coins_by_news_and_data(symbols: list) -> dict:
 
             score = 0.0
 
-            # News sentiment scoring
-            for line in lines:
-                if _coin_mentioned(line, coin):
-                    score += 0.5 + _score_line(line)   # base mention bonus
+            # News sentiment scoring — weighted by source credibility and
+            # how recently the story ran.
+            for title, desc, pub_dt, src_weight in raw_items:
+                text = f"{title} {desc}".lower()
+                if _coin_mentioned(text, coin):
+                    score += (0.5 + _score_line(text)) * src_weight * _recency_weight(pub_dt)
 
             # Data platform bonuses
             if coin in trending_cg:
@@ -514,13 +635,149 @@ def score_coins_by_news_and_data(symbols: list) -> dict:
             max_abs = max(abs(v) for v in scores.values()) or 1
             scores  = {k: round(v / max_abs * 5, 2) for k, v in scores.items()}
 
+        if getattr(config, "AI_SENTIMENT_ENABLED", False):
+            scores = _blend_ai_sentiment(scores, raw_items, symbols)
+
         top = dict(sorted(scores.items(), key=lambda x: x[1], reverse=True)[:10])
         log.info(f"[SCORE] Top coins by news+data: {top}")
+
+        _persist_sentiment_history(scores)
         return scores
 
     except Exception as e:
         log.warning(f"[SCORE] Scoring failed: {e}")
         return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OPTIONAL: AI-BASED SENTIMENT (Claude) — off by default, see
+#  config.AI_SENTIMENT_ENABLED. Keyword scoring above is free and always
+#  runs; this adds an LLM read of the same de-duped headlines on top,
+#  which handles negation/sarcasm/context far better than keyword matching
+#  but costs a small amount per scoring pass.
+# ══════════════════════════════════════════════════════════════════════════════
+
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+_AI_SENTIMENT_MODEL = "claude-sonnet-4-6"
+
+
+def _ai_score_coins(coin_headlines: dict) -> dict:
+    """Sends up to a handful of headlines per coin to Claude and asks for
+    a -5..+5 sentiment score per coin, returned as strict JSON. Returns {}
+    on any failure so callers can fall back to the keyword scores untouched."""
+    if not coin_headlines:
+        return {}
+    try:
+        prompt_lines = []
+        for coin, headlines in coin_headlines.items():
+            prompt_lines.append(f"{coin}:")
+            for h in headlines[:6]:
+                prompt_lines.append(f"  - {h}")
+        prompt = (
+            "Score the market sentiment for each of these cryptocurrencies "
+            "based on the headlines listed under it, from -5 (very bearish) "
+            "to +5 (very bullish). Watch for negation and context (e.g. "
+            "\"no crash\" is NOT bearish). Respond with ONLY a JSON object "
+            "mapping each coin symbol to a number, nothing else.\n\n"
+            + "\n".join(prompt_lines)
+        )
+        resp = requests.post(
+            ANTHROPIC_API_URL,
+            headers={
+                "x-api-key":         config.AI_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            json={
+                "model":      _AI_SENTIMENT_MODEL,
+                "max_tokens": 300,
+                "messages":   [{"role": "user", "content": prompt}],
+            },
+            timeout=20,
+        )
+        if not resp.ok:
+            log.warning(f"[AI SENTIMENT] Request failed: {resp.status_code}")
+            return {}
+        data  = resp.json()
+        texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
+        raw   = "\n".join(texts).strip()
+        raw   = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        parsed = json.loads(raw)
+        return {k.upper(): float(v) for k, v in parsed.items()}
+    except Exception as e:
+        log.warning(f"[AI SENTIMENT] Failed, keeping keyword scores: {e}")
+        return {}
+
+
+def _blend_ai_sentiment(keyword_scores: dict, raw_items: list, symbols: list) -> dict:
+    """Blends the free keyword-based scores with an AI read of the same
+    headlines (50/50), falling back to pure keyword scores for any coin
+    the AI call didn't return or if the call fails outright."""
+    coins = {sym.split("-")[0].upper() for sym in symbols if len(sym.split("-")[0]) >= 2}
+    coin_headlines = {}
+    for coin in coins:
+        matches = [title for title, desc, _, _ in raw_items
+                  if _coin_mentioned(f"{title} {desc}", coin)]
+        if matches:
+            coin_headlines[coin] = matches
+
+    ai_scores = _ai_score_coins(coin_headlines)
+    if not ai_scores:
+        return keyword_scores
+
+    blended = {}
+    for coin, kw_score in keyword_scores.items():
+        ai_score = ai_scores.get(coin)
+        blended[coin] = round((kw_score + ai_score) / 2, 2) if ai_score is not None else kw_score
+    return blended
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SENTIMENT HISTORY — small durable time series so the dashboard can plot
+#  a trend instead of only ever showing the current snapshot.
+# ══════════════════════════════════════════════════════════════════════════════
+
+SENTIMENT_HISTORY_PATH = os.path.join("logs", "sentiment_history.jsonl")
+_history_write_lock = threading.Lock()
+
+
+def _persist_sentiment_history(scores: dict) -> None:
+    """Appends one {timestamp, scores} line to the sentiment history log.
+    Never raises — a failed write here should never interrupt scoring."""
+    if not scores:
+        return
+    try:
+        os.makedirs("logs", exist_ok=True)
+        record = {"recorded_at": datetime.now().isoformat(), "scores": scores}
+        with _history_write_lock:
+            with open(SENTIMENT_HISTORY_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+    except Exception as e:
+        log.debug(f"[SCORE] Failed to persist sentiment history: {e}")
+
+
+def load_sentiment_history(hours: int = 48) -> list:
+    """Reads back the sentiment history log, optionally limited to the
+    last `hours` hours. Returns a list of {recorded_at, scores} dicts,
+    oldest first. Silently skips unparseable lines (e.g. a truncated
+    final line from a crash mid-write)."""
+    if not os.path.exists(SENTIMENT_HISTORY_PATH):
+        return []
+    cutoff  = datetime.now() - timedelta(hours=hours) if hours else None
+    records = []
+    with open(SENTIMENT_HISTORY_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                if cutoff and datetime.fromisoformat(rec["recorded_at"]) < cutoff:
+                    continue
+                records.append(rec)
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+    return records
 
 
 def clear_cache(coin: str = None):

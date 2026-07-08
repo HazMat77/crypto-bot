@@ -349,6 +349,13 @@ AI_NEWS_SEARCH    = True          # FREE — reads RSS from The Block, CoinDesk,
                                   # Cointelegraph, The Defiant. No API key needed.
 AI_CONFIDENCE_MIN = 63
 
+# Off by default — news_aggregator.py's coin scoring is free keyword-based
+# scoring unless this is on. When True, each scoring pass also sends the
+# de-duped headlines to Claude for a real sentiment read and blends it
+# 50/50 with the keyword score (more accurate, handles negation/context,
+# but costs a small amount per call — uses AI_API_KEY above).
+AI_SENTIMENT_ENABLED = False
+
 # ── Strategy engine approval threshold ─────────────────────────────────────
 # Separate from AI_CONFIDENCE_MIN above. This gates the strategy_engine.py
 # filter stack (volume, ADX, liquidity, news veto) AFTER RSI+MA already

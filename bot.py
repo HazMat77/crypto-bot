@@ -1254,12 +1254,48 @@ def liveness_pinger(mode, stop_event):
     heartbeat. This is the actual signal an external watchdog process
     checks; if this file stops updating, the bot has frozen or crashed
     even if individual threads are still technically alive but stuck.
+
+    Also writes a live open-positions snapshot (logs/positions_live.json)
+    on the same cadence, so dashboard.py — a separate process that can't
+    see this process's in-memory coin_holdings/coin_buy_spent — can show
+    real unrealised P&L instead of only ever seeing closed trades.
     """
     from pathlib import Path
     import json as _json
 
-    liveness_path = Path("logs/liveness.json")
+    liveness_path  = Path("logs/liveness.json")
+    positions_path = Path("logs/positions_live.json")
     liveness_path.parent.mkdir(exist_ok=True)
+
+    def _write_positions():
+        try:
+            positions = []
+            for ex_name, exchange in EXCHANGES.items():
+                for sym, holding in coin_in_position[ex_name].items():
+                    if not holding:
+                        continue
+                    try:
+                        cur   = exchange.get_price(sym)
+                        qty   = coin_holdings[ex_name][sym]
+                        spent = coin_buy_spent[ex_name][sym]
+                        positions.append({
+                            "exchange":       ex_name,
+                            "coin":           sym,
+                            "qty":            qty,
+                            "spent":          spent,
+                            "current_price":  cur,
+                            "current_value":  round(qty * cur, 4),
+                            "unrealized_pnl": round(qty * cur - spent, 4),
+                        })
+                    except Exception:
+                        pass   # one bad price fetch shouldn't drop the whole snapshot
+            with open(positions_path, "w") as f:
+                _json.dump({
+                    "updated_at": datetime.now().isoformat(),
+                    "positions":  positions,
+                }, f)
+        except Exception as e:
+            log.warning(f"[LIVENESS] Could not write positions snapshot: {e}")
 
     def _write():
         try:
@@ -1275,6 +1311,7 @@ def liveness_pinger(mode, stop_event):
                 }, f)
         except Exception as e:
             log.warning(f"[LIVENESS] Could not write liveness file: {e}")
+        _write_positions()
 
     _write()   # write immediately on startup — a watchdog should be able to
                # tell "just launched" apart from "crashed with no signal ever"
