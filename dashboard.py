@@ -7,11 +7,11 @@ Run with:
     streamlit run dashboard.py
 
 Features:
-  - Live pool balance per exchange
-  - Open positions with unrealised P&L
-  - Today's trades and P&L
-  - Monthly summary
-  - News sentiment scores per coin
+  - Portfolio page: realized P&L (from the durable trade ledger) plus
+    unrealized P&L on open positions (from the live snapshot bot.py
+    writes every 2 minutes), equity curve, drawdown, per-coin breakdown,
+    filterable by Today / This Week / This Month / All-time
+  - News sentiment scores per coin, plus a sentiment trend chart
   - Correlation matrix
   - Backtest results viewer
   - Config editor
@@ -25,8 +25,9 @@ import sys
 import json
 import glob
 import subprocess
+import time
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import bootstrap
 bootstrap.ensure_installed(optional=True)  # pandas, plotly (streamlit itself must
@@ -250,9 +251,10 @@ def load_config():
     return cfg
 
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=600)
 def load_news_scores():
-    """Get current news sentiment scores."""
+    """Get current news sentiment scores. TTL matches news_aggregator's
+    own 10-minute cache — no point polling faster than the source refreshes."""
     try:
         from news_aggregator import score_coins_by_news_and_data
         symbols = ["BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT",
@@ -261,6 +263,44 @@ def load_news_scores():
         return score_coins_by_news_and_data(symbols)
     except Exception as e:
         return {"error": str(e)}
+
+
+@st.cache_data(ttl=20)
+def load_open_positions():
+    """Reads the live open-positions snapshot bot.py writes every 2
+    minutes (logs/positions_live.json). Returns (positions list, updated_at
+    str) — empty list / None if the bot has never written one yet
+    (e.g. not running, or on an old version without this feature)."""
+    path = Path("logs/positions_live.json")
+    if not path.exists():
+        return [], None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("positions", []), data.get("updated_at")
+    except Exception:
+        return [], None
+
+
+@st.cache_data(ttl=20)
+def load_ledger_trades(start_date: str = None, end_date: str = None):
+    """Reads the durable trade ledger (trade_ledger.py) — every completed
+    trade ever recorded, independent of the bot's in-memory daily/monthly
+    lists which reset on their own schedule and don't survive a restart."""
+    try:
+        from trade_ledger import load_trades
+        return load_trades(start_date, end_date)
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=60)
+def load_sentiment_history_cached(hours: int = 72):
+    try:
+        from news_aggregator import load_sentiment_history
+        return load_sentiment_history(hours=hours)
+    except Exception:
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -360,7 +400,7 @@ with top_r:
 st.divider()
 
 # ── Tab bar ────────────────────────────────────────────────────────────────
-PAGES = ["📊 Overview", "📈 Backtest Results", "🎲 Monte Carlo",
+PAGES = ["📊 Overview", "💰 Portfolio", "📈 Backtest Results", "🎲 Monte Carlo",
         "🔗 Correlation", "📰 News Scores", "⚙️ Config"]
 st.session_state.setdefault("active_page", PAGES[0])
 
@@ -434,6 +474,120 @@ if page == "📊 Overview":
                 st.error(f"Could not read log: {e}")
     else:
         st.info("No log files found. Start the bot to generate logs.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PORTFOLIO / P&L PAGE
+#  Built from two sources a separate process can actually see: the durable
+#  trade ledger (trade_ledger.py, realized P&L) and the live positions
+#  snapshot bot.py writes every 2 minutes (logs/positions_live.json,
+#  unrealized P&L on anything still open).
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif page == "💰 Portfolio":
+    st.title("💰 Portfolio & P&L")
+
+    period_col, refresh_col = st.columns([3, 1])
+    with period_col:
+        period = st.radio("Period", ["Today", "This Week", "This Month", "All-time"],
+                          horizontal=True, key="pnl_period")
+    with refresh_col:
+        auto_refresh = st.checkbox("Auto-refresh (15s)", key="pnl_auto_refresh")
+
+    today = date.today()
+    if period == "Today":
+        start_date = end_date = today.isoformat()
+    elif period == "This Week":
+        start_date, end_date = (today - timedelta(days=today.weekday())).isoformat(), today.isoformat()
+    elif period == "This Month":
+        start_date, end_date = today.replace(day=1).isoformat(), today.isoformat()
+    else:
+        start_date = end_date = None
+
+    trades    = load_ledger_trades(start_date, end_date)
+    positions, positions_updated = load_open_positions()
+
+    realized_net    = sum(t.get("pnl_net", 0) or 0 for t in trades)
+    realized_gross  = sum(t.get("pnl_gross", 0) or 0 for t in trades)
+    fees            = sum(t.get("fees", 0) or 0 for t in trades)
+    unrealized_net  = sum(p.get("unrealized_pnl", 0) for p in positions)
+    wins            = sum(1 for t in trades if (t.get("pnl_net") or 0) >= 0)
+    losses          = len(trades) - wins
+    win_rate        = (wins / len(trades) * 100) if trades else 0.0
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Realized P&L", f"${realized_net:+.4f}")
+    m2.metric("Unrealized P&L", f"${unrealized_net:+.4f}",
+              help="From open positions — requires the bot to be running "
+                   "on a version that writes logs/positions_live.json.")
+    m3.metric("Total P&L", f"${realized_net + unrealized_net:+.4f}")
+    m4.metric("Win Rate", f"{win_rate:.0f}%", f"{wins}W / {losses}L")
+    m5.metric("Fees Paid", f"-${fees:.4f}")
+
+    st.divider()
+
+    # ── Equity curve + drawdown ─────────────────────────────────────────────
+    if trades:
+        trades_sorted = sorted(trades, key=lambda t: t.get("exit_time") or "")
+        df_eq = pd.DataFrame({
+            "trade_num": range(1, len(trades_sorted) + 1),
+            "exit_time": [t.get("exit_time", "") for t in trades_sorted],
+            "coin":      [t.get("coin", "?") for t in trades_sorted],
+            "pnl_net":   [t.get("pnl_net", 0) or 0 for t in trades_sorted],
+        })
+        df_eq["equity"]    = df_eq["pnl_net"].cumsum()
+        df_eq["peak"]      = df_eq["equity"].cummax()
+        df_eq["drawdown"]  = df_eq["equity"] - df_eq["peak"]
+
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_eq = go.Figure()
+            fig_eq.add_trace(go.Scatter(
+                x=df_eq["trade_num"], y=df_eq["equity"],
+                mode="lines", name="Cumulative Realized P&L",
+                line=dict(color="#1D9E75", width=2),
+            ))
+            fig_eq.update_layout(title=f"Equity Curve — {period}",
+                                 xaxis_title="Trade #", yaxis_title="Cumulative P&L (USDT)")
+            st.plotly_chart(fig_eq, use_container_width=True)
+        with c2:
+            fig_dd = go.Figure()
+            fig_dd.add_trace(go.Scatter(
+                x=df_eq["trade_num"], y=df_eq["drawdown"],
+                mode="lines", fill="tozeroy", name="Drawdown",
+                line=dict(color="#D85A30", width=2),
+            ))
+            fig_dd.update_layout(title="Drawdown", xaxis_title="Trade #",
+                                 yaxis_title="Drawdown from peak (USDT)")
+            st.plotly_chart(fig_dd, use_container_width=True)
+
+        # ── Per-coin breakdown ────────────────────────────────────────────
+        st.subheader("Per-Coin Breakdown")
+        by_coin = df_eq.groupby("coin")["pnl_net"].agg(["count", "sum"]).reset_index()
+        by_coin.columns = ["Coin", "Trades", "Net P&L"]
+        by_coin["Net P&L"] = by_coin["Net P&L"].map(lambda v: f"${v:+.4f}")
+        by_coin = by_coin.sort_values("Trades", ascending=False)
+        st.dataframe(by_coin, use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No closed trades recorded for {period.lower()} yet.")
+
+    # ── Open positions ──────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("📌 Open Positions")
+    if positions_updated:
+        st.caption(f"Snapshot updated {positions_updated} — refreshed by the bot every 2 minutes while running.")
+    if positions:
+        df_pos = pd.DataFrame(positions)
+        df_pos = df_pos[["exchange", "coin", "qty", "spent", "current_price",
+                         "current_value", "unrealized_pnl"]]
+        st.dataframe(df_pos, use_container_width=True, hide_index=True)
+    else:
+        st.info("No open positions — either flat right now, or the bot hasn't "
+               "written a positions snapshot yet (needs to be running).")
+
+    if auto_refresh:
+        time.sleep(15)
+        st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -695,6 +849,29 @@ elif page == "📰 News Scores":
     else:
         st.info("No scores available — check internet connection")
 
+    # ── Sentiment trend ──────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("📈 Sentiment Trend")
+    hours = st.slider("Lookback hours", 6, 168, 48, key="sentiment_lookback")
+    history = load_sentiment_history_cached(hours=hours)
+    if history:
+        rows = []
+        for rec in history:
+            for coin, score in rec.get("scores", {}).items():
+                rows.append({"time": rec["recorded_at"], "coin": coin, "score": score})
+        df_hist = pd.DataFrame(rows)
+        if not df_hist.empty:
+            top_coins = (df_hist.groupby("coin")["score"].apply(lambda s: s.abs().mean())
+                        .sort_values(ascending=False).head(8).index)
+            fig_trend = px.line(df_hist[df_hist["coin"].isin(top_coins)],
+                                x="time", y="score", color="coin",
+                                title=f"Sentiment score over last {hours}h")
+            fig_trend.add_hline(y=0, line_dash="dash", line_color="gray")
+            st.plotly_chart(fig_trend, use_container_width=True)
+    else:
+        st.info("No sentiment history yet — it builds up each time scores are "
+               "fetched (dashboard load, or the bot's own AI analysis calls).")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONFIG PAGE
@@ -771,7 +948,7 @@ elif page == "⚙️ Config":
 
         # ── Bot settings — no .py editing required.
         st.subheader("Bot Settings")
-        col_ai, col_mode, col_tg, col_wd = st.columns(4)
+        col_ai, col_mode, col_tg, col_wd, col_sent = st.columns(5)
         with col_ai:
             ai_on = st.checkbox("AI Analyst", value=bool(cfg.get("AI_ENABLED", True)))
         with col_mode:
@@ -784,6 +961,17 @@ elif page == "⚙️ Config":
             tg_on = st.checkbox("Telegram Notifications", value=bool(cfg.get("TELEGRAM_ENABLED", True)))
         with col_wd:
             wd_on = st.checkbox("Watchdog Auto-Restart", value=False)
+        with col_sent:
+            try:
+                import config as _sent_cfg
+                sent_default = bool(getattr(_sent_cfg, "AI_SENTIMENT_ENABLED", False))
+            except Exception:
+                sent_default = False
+            sentiment_ai_on = st.checkbox("AI Sentiment Scoring", value=sent_default,
+                                          help="Blends news_aggregator's free keyword sentiment "
+                                              "with a Claude-based read of the same headlines. "
+                                              "Costs a small amount per scoring pass — uses the "
+                                              "Claude API key set below.")
 
         pool = st.number_input("Paper Starting Pool (USDT)", min_value=1.0,
                                value=float(cfg.get("PAPER_STARTING_USDT", 100.0)), step=10.0)
@@ -815,6 +1003,7 @@ elif page == "⚙️ Config":
                 "TELEGRAM_ENABLED":      tg_on,
                 "WATCHDOG_AUTO_RESTART": wd_on,
                 "PAPER_STARTING_USDT":   pool,
+                "AI_SENTIMENT_ENABLED":  sentiment_ai_on,
             })
             settings_writer.write_bot_secrets({
                 "AI_API_KEY":   claude_key.strip(),
