@@ -429,6 +429,42 @@ def calc_rsi(series, period=14):
 def calc_ma(series, period=20):
     return round(float(series.rolling(period).mean().iloc[-1]), 6)
 
+def calc_ema(series, period=200):
+    """Exponential Moving Average — used for EMA(200) trend direction filter."""
+    ema = series.ewm(span=period, adjust=False).mean()
+    return round(float(ema.iloc[-1]), 6)
+
+def calc_macd(series, fast=12, slow=26, signal=9):
+    """Returns (macd_line, signal_line). MACD > signal = bullish momentum."""
+    ema_fast   = series.ewm(span=fast,   adjust=False).mean()
+    ema_slow   = series.ewm(span=slow,   adjust=False).mean()
+    macd_line  = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return float(macd_line.iloc[-1]), float(signal_line.iloc[-1])
+
+def calc_adx(df, period=14):
+    """Returns ADX value. < 25 = ranging market (good for RSI mean-reversion)."""
+    try:
+        high  = df["high"]
+        low   = df["low"]
+        close = df["close"]
+        tr = pd.concat([
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low  - close.shift(1)).abs()
+        ], axis=1).max(axis=1)
+        dm_plus  = (high - high.shift(1)).clip(lower=0)
+        dm_minus = (low.shift(1) - low).clip(lower=0)
+        dm_plus  = dm_plus.where(dm_plus > dm_minus, 0)
+        dm_minus = dm_minus.where(dm_minus > dm_plus, 0)
+        atr14    = tr.rolling(period).mean()
+        di_plus  = 100 * (dm_plus.rolling(period).mean()  / atr14)
+        di_minus = 100 * (dm_minus.rolling(period).mean() / atr14)
+        dx       = 100 * ((di_plus - di_minus).abs() / (di_plus + di_minus + 1e-10))
+        return float(dx.rolling(period).mean().iloc[-1])
+    except Exception:
+        return 20.0  # neutral fallback
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  TRADING ACTIONS
@@ -903,6 +939,36 @@ def coin_worker(ex_name, exchange, symbol, mode, stop_event):
             rsi   = calc_rsi(df["close"], config.RSI_PERIOD)
             ma    = calc_ma(df["close"],  config.MA_PERIOD)
 
+            # ── EMA(200) trend filter ─────────────────────────────────────
+            ema200 = None
+            if getattr(config, "EMA_TREND_FILTER_ENABLED", True) and len(df) >= 50:
+                try:
+                    ema200 = calc_ema(df["close"], getattr(config, "EMA_TREND_PERIOD", 200))
+                except Exception:
+                    pass
+
+            # ── MACD confirmation ─────────────────────────────────────────
+            macd_line, macd_signal = None, None
+            if getattr(config, "MACD_CONFIRMATION_ENABLED", True) and len(df) >= 35:
+                try:
+                    macd_line, macd_signal = calc_macd(
+                        df["close"],
+                        fast=getattr(config, "MACD_FAST", 12),
+                        slow=getattr(config, "MACD_SLOW", 26),
+                        signal=getattr(config, "MACD_SIGNAL", 9),
+                    )
+                except Exception:
+                    pass
+
+            # ── ADX ranging filter ────────────────────────────────────────
+            adx_value = None
+            adx_max   = getattr(config, "ADX_MEAN_REVERSION_MAX", 25)
+            if adx_max > 0 and "high" in df.columns and len(df) >= 30:
+                try:
+                    adx_value = calc_adx(df, period=14)
+                except Exception:
+                    pass
+
             # Validate RSI and MA computed correctly
             if rsi != rsi or ma != ma:   # NaN check
                 log.warning(f"[{tag}] RSI/MA returned NaN — skipping RSI/MA logic this cycle (stop-loss/take-profit still checked every cycle regardless)")
@@ -916,7 +982,10 @@ def coin_worker(ex_name, exchange, symbol, mode, stop_event):
             last_error_msg = ""
             error_count    = 0
 
-            log.info(f"[{tag}] ${price:.6f}  RSI={rsi}  MA={ma:.6f}  {'HOLDING' if holding else 'waiting'}")
+            _ema_str  = f"  EMA200={ema200:.4f}" if ema200 else ""
+            _macd_str = f"  MACD={'▲' if (macd_line is not None and macd_signal is not None and macd_line > macd_signal) else '▼'}" if macd_line is not None else ""
+            _adx_str  = f"  ADX={adx_value:.1f}" if adx_value is not None else ""
+            log.info(f"[{tag}] ${price:.6f}  RSI={rsi}  MA={ma:.6f}{_ema_str}{_macd_str}{_adx_str}  {'HOLDING' if holding else 'waiting'}")
 
             # ── Manual pause check (from /pause command) ──────────────────
             if manual_pause.is_set() and not holding:
@@ -1015,6 +1084,30 @@ def coin_worker(ex_name, exchange, symbol, mode, stop_event):
                         rsi_buy = rsi < params["rsi_buy"]
                     else:
                         rsi_buy = rsi < params["rsi_buy"] and price > ma
+
+                    # ── EMA(200) trend filter — only buy in uptrend ──────────
+                    if rsi_buy and ema200 is not None:
+                        above_ema = price > ema200
+                        if not above_ema:
+                            log.info(f"[{tag}] {pool_label} ⛔ EMA(200) trend filter: "
+                                    f"price ${price:.4f} < EMA200 ${ema200:.4f} — skipping (downtrend)")
+                            rsi_buy = False
+
+                    # ── MACD confirmation — bullish momentum required ─────────
+                    if rsi_buy and macd_line is not None and macd_signal is not None:
+                        macd_bullish = macd_line > macd_signal
+                        if not macd_bullish:
+                            log.info(f"[{tag}] {pool_label} ⛔ MACD confirmation: "
+                                    f"MACD={macd_line:.6f} < Signal={macd_signal:.6f} — bearish momentum")
+                            rsi_buy = False
+
+                    # ── ADX range filter — RSI works best in ranging markets ──
+                    if rsi_buy and adx_value is not None and adx_max > 0:
+                        in_range = adx_value < adx_max
+                        if not in_range:
+                            log.info(f"[{tag}] {pool_label} ⛔ ADX range filter: "
+                                    f"ADX={adx_value:.1f} > {adx_max} — strong trend, skipping mean-rev entry")
+                            rsi_buy = False
 
                 if rsi_buy:
                     # Run adaptive strategy engine (filters + calibrated TP/SL)

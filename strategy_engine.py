@@ -57,8 +57,8 @@ class RiskRewardCalibrator:
         So if SL=6%, TP must be > 4.9% (not 4%!)
     """
 
-    def __init__(self, min_tp: float = 0.025, max_tp: float = 0.25,
-                 min_sl: float = 0.02,  max_sl: float = 0.10):
+    def __init__(self, min_tp: float = 0.03, max_tp: float = 0.12,
+                 min_sl: float = 0.02, max_sl: float = 0.06):
         self.min_tp = min_tp
         self.max_tp = max_tp
         self.min_sl = min_sl
@@ -156,11 +156,14 @@ class SignalFilters:
     @staticmethod
     def adx_trend_strength(df: pd.DataFrame,
                            period: int = 14,
-                           min_adx: float = 20.0) -> bool:
+                           min_adx: float = 15.0,
+                           max_adx: float = 0.0) -> bool:
         """
         ADX (Average Directional Index) measures trend strength.
-        ADX > 20 = meaningful trend present (good for RSI signals)
-        ADX < 15 = choppy sideways market (many false signals)
+
+        For BREAKOUT strategies:   ADX > min_adx (trend is present) = good
+        For MEAN-REVERSION (RSI):  ADX < max_adx (market is ranging) = good
+        Pass max_adx > 0 to enable the mean-reversion range check.
         """
         if len(df) < period * 2 + 5:
             return True
@@ -170,31 +173,32 @@ class SignalFilters:
             low   = df["low"]
             close = df["close"]
 
-            # True Range
             tr = pd.concat([
                 high - low,
                 (high - close.shift(1)).abs(),
                 (low  - close.shift(1)).abs()
             ], axis=1).max(axis=1)
 
-            # Directional movement
             dm_plus  = (high - high.shift(1)).clip(lower=0)
             dm_minus = (low.shift(1) - low).clip(lower=0)
-
-            # Zero out where the other is larger
             dm_plus  = dm_plus.where(dm_plus > dm_minus, 0)
             dm_minus = dm_minus.where(dm_minus > dm_plus, 0)
 
-            # Smoothed
-            atr14   = tr.rolling(period).mean()
-            di_plus = 100 * (dm_plus.rolling(period).mean()  / atr14)
-            di_minus= 100 * (dm_minus.rolling(period).mean() / atr14)
+            atr14    = tr.rolling(period).mean()
+            di_plus  = 100 * (dm_plus.rolling(period).mean()  / atr14)
+            di_minus = 100 * (dm_minus.rolling(period).mean() / atr14)
 
-            dx      = 100 * ((di_plus - di_minus).abs() / (di_plus + di_minus + 1e-10))
-            adx     = dx.rolling(period).mean().iloc[-1]
+            dx  = 100 * ((di_plus - di_minus).abs() / (di_plus + di_minus + 1e-10))
+            adx = dx.rolling(period).mean().iloc[-1]
 
-            passes  = adx >= min_adx
-            log.debug(f"[FILTER] ADX={adx:.1f} (min={min_adx}) {'✅' if passes else '❌ choppy'}")
+            if max_adx > 0:
+                # Mean-reversion mode: want low ADX (ranging market)
+                passes = adx < max_adx
+                log.debug(f"[FILTER] ADX={adx:.1f} (max={max_adx}) {'✅ ranging' if passes else '❌ trending'}")
+            else:
+                # Breakout/trend mode: want high ADX (trend present)
+                passes = adx >= min_adx
+                log.debug(f"[FILTER] ADX={adx:.1f} (min={min_adx}) {'✅' if passes else '❌ choppy'}")
             return passes
 
         except Exception as e:
@@ -454,14 +458,16 @@ def evaluate_signal(
         filters_failed.append("volume_low")
         confidence -= 5
 
-    # 2. ADX trend strength (only matters for BUY signals — avoid choppy)
+    # 2. ADX filter — breakout wants high ADX, mean-reversion wants LOW ADX
     if action == "BUY":
-        if filt.adx_trend_strength(df):
-            filters_passed.append("adx_trend")
-            confidence += 15
+        adx_max_cfg = getattr(config, "ADX_MEAN_REVERSION_MAX", 25) if config else 25
+        adx_ok = filt.adx_trend_strength(df, max_adx=float(adx_max_cfg))
+        if adx_ok:
+            filters_passed.append("adx_ranging")
+            confidence += 15   # ranging market = RSI mean-reversion works well
         else:
-            filters_failed.append("adx_choppy")
-            confidence -= 8    # reduced from 20 — ADX absence shouldn't kill a valid RSI signal
+            filters_failed.append("adx_trending")
+            confidence -= 10   # strong trend detected — RSI signals unreliable here
 
     # 3. Liquidity check
     if filt.liquidity_check(df):

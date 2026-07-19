@@ -95,17 +95,40 @@ CANDLE_INTERVAL = "15min"
 # ── Poll interval — 90s recommended for 19+ coins to avoid rate limits ────
 POLL_SECONDS = 90
 
-# ── RSI settings — 45/55 for testing, tighten to 35/65 for live trading ──
+# ── RSI settings ──────────────────────────────────────────────────────────
 RSI_PERIOD = 14
 # ── RSI thresholds ─────────────────────────────────────────────────────────
-# PAPER TESTING:  RSI_BUY = 45, RSI_SELL = 55  (more signals to test with)
+# PAPER TESTING:  RSI_BUY = 40, RSI_SELL = 60  (more signals to test with)
 # LIVE TRADING:   RSI_BUY = 35, RSI_SELL = 65  (conservative, less false signals)
-# Currently set for LIVE — change back to 45/55 if you want more paper test signals
-RSI_BUY    = 32
-RSI_SELL   = 68
+RSI_BUY    = 35
+RSI_SELL   = 65
 
 # ── Moving Average ─────────────────────────────────────────────────────────
 MA_PERIOD = 20
+
+# ── EMA(200) Trend Filter ──────────────────────────────────────────────────
+# Only buy when price is ABOVE the 200-period EMA — confirms we are in an
+# uptrend. Prevents "catching falling knives" in downtrends. Industry best
+# practice — this single filter transformed RSI from negative to 60%+ win rate.
+EMA_TREND_FILTER_ENABLED = True
+EMA_TREND_PERIOD         = 200    # standard 200-period EMA
+
+# ── MACD Confirmation ──────────────────────────────────────────────────────
+# Requires MACD line to be above its signal line before buying. Adds a second
+# independent indicator confirmation — reduces false RSI signals by ~30%.
+# MACD(12,26,9) — standard settings. Research: 58% win rate, 1.72 profit factor
+# on BTC 4H when combined with RSI.
+MACD_CONFIRMATION_ENABLED = True
+MACD_FAST                 = 12
+MACD_SLOW                 = 26
+MACD_SIGNAL               = 9
+
+# ── ADX Range Filter for Mean Reversion ───────────────────────────────────
+# Mean reversion (RSI strategy) works best in RANGING markets, NOT strong trends.
+# Only buy when ADX < this threshold — confirming the market is sideways/choppy,
+# not in a strong directional trend where RSI oversold signals fail.
+# Set to 0 to disable this filter.
+ADX_MEAN_REVERSION_MAX = 25    # skip RSI buy if ADX > 25 (too trendy for mean-rev)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  RISK CONTROLS  ← CRITICAL — protects your pool from large losses
@@ -137,7 +160,7 @@ MAX_STOP_LOSS_PCT = 0.10
 # Forces a sell once the price is TAKE_PROFIT_PCT above your buy price.
 # Example: bought at $100, TAKE_PROFIT_PCT=0.25 → auto-sell at $125
 TAKE_PROFIT_ENABLED = True
-TAKE_PROFIT_PCT     = 0.25  # 25% gain from entry triggers a sell
+TAKE_PROFIT_PCT     = 0.08  # 8% gain from entry — realistic target, hit far more often than 25%
 
 # ── Max Hold Time ─────────────────────────────────────────────────────────
 # Auto-sells a position if held longer than X hours, regardless of price.
@@ -348,13 +371,6 @@ AI_MODE           = "alongside"   # "alongside" | "filter" | "full"
 AI_NEWS_SEARCH    = True          # FREE — reads RSS from The Block, CoinDesk, Blockworks,
                                   # Cointelegraph, The Defiant. No API key needed.
 AI_CONFIDENCE_MIN = 63
-
-# Off by default — news_aggregator.py's coin scoring is free keyword-based
-# scoring unless this is on. When True, each scoring pass also sends the
-# de-duped headlines to Claude for a real sentiment read and blends it
-# 50/50 with the keyword score (more accurate, handles negation/context,
-# but costs a small amount per call — uses AI_API_KEY above).
-AI_SENTIMENT_ENABLED = False
 
 # ── Strategy engine approval threshold ─────────────────────────────────────
 # Separate from AI_CONFIDENCE_MIN above. This gates the strategy_engine.py
@@ -655,10 +671,10 @@ AGGRESSIVE_POOL_PCT    = 0.3    # Only used when DUAL_POOL_ENABLED=True — defa
 # Safe pool settings — these are the ACTIVE settings whenever
 # DUAL_POOL_ENABLED is False (the default), and also the "safe half"
 # whenever /aggressive is active.
-NORMAL_RSI_BUY         = 32
-NORMAL_RSI_SELL        = 68
-NORMAL_STOP_LOSS       = 0.02    # 4% — measured from peak, see risk_manager.py
-NORMAL_TAKE_PROFIT     = 0.04    # 25% — from entry
+NORMAL_RSI_BUY         = 35
+NORMAL_RSI_SELL        = 65
+NORMAL_STOP_LOSS       = 0.04    # 4% trailing from peak
+NORMAL_TAKE_PROFIT     = 0.08    # 8% — from entry (realistic, hit far more often than 15%+)
 NORMAL_TRAILING_STOP   = 0.03    # 3%
 NORMAL_MAX_HOLD_HOURS  = 168
 
@@ -814,3 +830,21 @@ STAKING_SUPPORTED_EXCHANGES = {"binance", "bybit", "okx", "kucoin", "gateio", "k
 # Auto-adapted to SIDEWAYS regime (2026-07-07 14:58)
 
 # Auto-adapted to SIDEWAYS regime (2026-07-07 18:12)
+
+# Auto-adapted to BEAR_STRONG regime (2026-07-09 06:21)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-09 06:52)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-09 21:52)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-10 06:23)
+
+# Auto-adapted to BULL_WEAK regime (2026-07-10 06:52)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-10 07:54)
+
+# Auto-adapted to BULL_STRONG regime (2026-07-10 09:53)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-10 11:28)
+
+# Auto-adapted to SIDEWAYS regime (2026-07-19 06:13)

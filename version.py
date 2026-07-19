@@ -16,8 +16,8 @@ Format: MAJOR.MINOR.PATCH (semantic versioning)
   PATCH — bug fixes, no new behaviour
 """
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 # Optional human-readable release name/date — shown in /status and /version.
 # Update alongside __version__ when you bump it.
-RELEASE_DATE = "2026-06-26"
+RELEASE_DATE = "2026-07-19"
